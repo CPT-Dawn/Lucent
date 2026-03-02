@@ -1,0 +1,44 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║                      Lucent Configuration                        ║
+# ║            Wayland Notification Daemon — Default Theme           ║
+# ╚══════════════════════════════════════════════════════════════════╝
+#
+# This file is auto-generated on first launch.
+# Edit freely — Lucent will use your values on next startup.
+# Delete this file to restore defaults.
+
+# ── Geometry ──────────────────────────────────────────────────────
+
+# Width of the notification popup in pixels.
+width = 350
+
+# How long a notification stays visible (seconds).
+# Individual notifications can override this via expire_timeout.
+timeout_seconds = 5
+
+# ── Colors (hex with optional alpha) ─────────────────────────────
+
+# Deep purple translucent background — the "Lucent" signature look.
+# The trailing E6 = 90% opacity for that frosted-glass feel.
+background_color = "#0D0B14E6"
+
+# Subtle luminous border to separate stacked notifications.
+border_color = "#1A1525"
+
+# Soft off-white text for readability on dark backgrounds.
+text_color = "#E8E2F0"
+
+# ── Shape & Typography ───────────────────────────────────────────
+
+# Corner radius in pixels (0 = sharp corners).
+corner_radius = 12
+
+# Font family for all notification text.
+# Falls back to the system default if unavailable.
+font_family = "JetBrains Mono"
+
+# ── Stacking ─────────────────────────────────────────────────────
+
+# Maximum notifications visible on screen at the same time.
+# Any extras are queued and shown as older ones dismiss.
+max_visible_notifications = 5

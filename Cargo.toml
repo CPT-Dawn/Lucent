@@ -1,0 +1,25 @@
+[package]
+name = "lucent"
+version = "0.1.0"
+edition = "2021"
+authors = ["Swastik Patel"]
+license = "MIT"
+description = "A blazing-fast, visually stunning Wayland notification daemon"
+
+[dependencies]
+# D-Bus server — tokio-native, no background async-io thread
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+# Async runtime for the D-Bus listener
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+
+# UI framework — pinned to 0.10 for gtk4-layer-shell 0.7 compatibility
+gtk4 = { version = "0.10", features = ["v4_12"] }
+
+# Wayland layer-shell integration for overlay notification windows
+gtk4-layer-shell = "0.7"
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+toml = "1.0"
+directories = "6"
