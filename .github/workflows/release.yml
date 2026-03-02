@@ -21,7 +21,8 @@ jobs:
       - name: Install Arch System Dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm rust gtk4 gtk4-layer-shell github-cli tar
+          # ADDED git, binutils, and gcc here
+          pacman -S --noconfirm rust gtk4 gtk4-layer-shell github-cli tar git binutils gcc
 
       - name: Compile Lucent (Release Profile)
         run: cargo build --release --locked
