@@ -1,112 +1,126 @@
 # Lucent
 
-**A blazing-fast, D-Bus activated Wayland notification daemon**
+A D-Bus activated Wayland notification daemon in Rust with zero resident idle footprint.
 
-[![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust)](https://www.rust-lang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Maintenance](https://img.shields.io/badge/Maintained-yes-brightgreen.svg)](https://github.com/CPT-Dawn/Lucent)
+[![CI](https://img.shields.io/badge/CI-placeholder-inactive)](#)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.XX%2B-orange?logo=rust)](#)
 
-![Demo](assets/demo.gif)
+![Lucent Demo](assets/demo.gif)
 
-Lucent is a Rust implementation of `org.freedesktop.Notifications` for Wayland compositors, built around a bus-activated, event-driven model. The process is not kept resident by default: D-Bus spawns it on first notification delivery, and it remains out of memory while idle.
+## Architecture & Philosophy
 
-> [!NOTE]
-> Lucent targets Wayland and uses `gtk4-layer-shell`. Your compositor must support layer-shell surfaces (wlroots-based compositors, GNOME with compatible stack, etc.).
+Lucent implements `org.freedesktop.Notifications` as a D-Bus-activated service (`org.freedesktop.Notifications.service`) rather than a permanently running daemon.
 
-## Why Lucent?
+- **Headless activation path:** no `systemd --user` unit and no compositor autostart stanza are required.
+- **Zero idle residency:** when no notification is sent, Lucent is not running and consumes no resident memory.
+- **Event-driven runtime:** process startup is triggered by D-Bus method calls; notification lifecycle is driven by IPC events.
+- **Rust memory safety:** notification state, IPC routing, and rendering are implemented in Rust, with Wayland surfaces via `gtk4-layer-shell`.
 
-Legacy notification daemons were largely shaped by X11-era assumptions: long-lived background processes, implicit compositor coupling, and ad-hoc startup orchestration. Lucent takes the opposite approach:
+Compared to legacy X11-era notification daemons (long-lived background services with startup orchestration), Lucent is bus-activated and compositor-native on Wayland.
 
-- **Rust 2021** implementation with memory-safe ownership and explicit concurrency boundaries.
-- **Pure D-Bus activation** on `org.freedesktop.Notifications`, without requiring user services or compositor autostart entries.
-- **Event-driven architecture** with D-Bus-triggered startup, async signal relay, and compositor-timed GTK animations.
-- **Wayland-native rendering** via `gtk4-layer-shell`, with overlay windows anchored for compositor-managed placement.
+> [!WARNING]
+> Lucent requires a Wayland session and layer-shell support through the GTK4/layer-shell stack.
 
-## Core Features
-
-- Full `org.freedesktop.Notifications` server surface (`Notify`, `CloseNotification`, `GetCapabilities`, `GetServerInformation`).
-- Signal emission for `NotificationClosed` and `ActionInvoked` with proper reason codes.
-- Replacement semantics for `replaces_id` and bounded queueing when `max_visible_notifications` is reached.
-- Delta-time frame-clock animations for entry, exit, and restack transitions.
-- Pango-markup body rendering and per-notification expiration policy (`-1`, `0`, or millisecond timeout).
-- Embedded config bootloader: auto-writes a default config to XDG config on first launch.
-
-## Installation
+## Installation (The Deployment Trinity)
 
 ### Arch Linux (AUR)
+
+#### `lucent-bin` (Recommended)
+
+Pre-compiled release artifacts for fastest installation.
+
+```bash
+paru -S lucent-bin
+```
+
+#### `lucent`
+
+Stable tagged release, compiled locally from source.
+
+```bash
+paru -S lucent
+```
+
+#### `lucent-git`
+
+Development package tracking the upstream `master` branch.
 
 ```bash
 paru -S lucent-git
 ```
 
-The package installs both:
+All packages install:
 
-- `/usr/bin/lucent`
-- `/usr/share/dbus-1/services/org.freedesktop.Notifications.service`
+- `lucent` to `/usr/bin/lucent`
+- D-Bus activation file to `/usr/share/dbus-1/services/org.freedesktop.Notifications.service`
 
-After installation, no `systemctl --user` commands and no compositor startup snippets are required.
-
-### Build from Source
+### Building from Source (Non-Arch)
 
 ```bash
 git clone https://github.com/CPT-Dawn/Lucent.git
 cd Lucent
-cargo build --release
+cargo build --release --locked
 ```
 
-Install the binary:
+Install binary and D-Bus service file:
 
 ```bash
-install -Dm755 target/release/lucent /usr/bin/lucent
-```
-
-Install the D-Bus activation file:
-
-```bash
-install -Dm644 org.freedesktop.Notifications.service \
+sudo install -Dm755 target/release/lucent /usr/bin/lucent
+sudo install -Dm644 org.freedesktop.Notifications.service \
   /usr/share/dbus-1/services/org.freedesktop.Notifications.service
 ```
 
-> [!NOTE]
-> Manual installs to `/usr/bin` and `/usr/share/dbus-1/services` require root privileges.
+> [!WARNING]
+> If `org.freedesktop.Notifications.service` is not installed in a D-Bus service directory, D-Bus activation will not occur.
 
 ## Configuration
 
-Lucent uses an embedded-asset bootloader pattern:
+Configuration is loaded from XDG config location:
 
-1. `default_config.toml` is compiled into the binary.
-2. On first launch, Lucent writes `~/.config/lucent/config.toml` if missing.
-3. The file is parsed into strongly typed Rust structs before UI startup.
+- Primary path: `~/.config/lucent/config.toml`
+- Source of defaults: embedded `default_config.toml` written automatically on first run
 
-Example configuration:
+Reference configuration:
 
 ```toml
-# Geometry
+# Lucent configuration
+# Location: ~/.config/lucent/config.toml
+
+# Width of each notification popup in pixels.
 width = 350
+
+# Default auto-dismiss timeout in seconds.
 timeout_seconds = 5
 
-# Colors
-background_color = "#0D0B14E6"  # deep translucent base
-border_color = "#00D1FF"        # cyan accent
-text_color = "#FF5A5F"          # red accent
+# Window background color (hex, optional alpha).
+background_color = "#0D0B14E6"
 
-# Shape & typography
+# Border color (hex).
+border_color = "#1A1525"
+
+# Text color (hex).
+text_color = "#E8E2F0"
+
+# Corner radius in pixels.
 corner_radius = 12
+
+# Font family used for title/body text.
 font_family = "Geist"
 
-# Stacking
+# Max visible notifications before queueing.
 max_visible_notifications = 5
 ```
 
 ## Usage & IPC
 
-Trigger notifications with any client that speaks the freedesktop spec:
+Standard freedesktop clients work without Lucent-specific integration:
 
 ```bash
-notify-send "Build complete" "All targets passed"
+notify-send "Build completed" "All targets passed"
 ```
 
-Direct D-Bus invocation is also supported:
+Raw D-Bus IPC example:
 
 ```bash
 dbus-send --session --type=method_call --print-reply \
@@ -117,12 +131,28 @@ dbus-send --session --type=method_call --print-reply \
   array:string:"" dict:string:string:"" int32:5000
 ```
 
-Do-Not-Disturb control flags are **not currently implemented** in the Lucent CLI; there are no DND toggle switches at this time.
+CLI surface:
 
-## Runtime Architecture
+- `lucent` currently exposes no custom command-line flags.
+- Lifecycle is managed by D-Bus activation, not by daemon control subcommands.
 
-- GTK runs on the main thread for window lifecycle and rendering.
-- A dedicated Tokio thread hosts the zbus server and session-bus I/O.
-- Channels bridge D-Bus ↔ UI command flow (`UiCommand`, `DbusSignal`) with no polling worker threads.
+## Contributing
 
-If another notification daemon already owns `org.freedesktop.Notifications`, Lucent exits cleanly rather than force-stealing the name.
+Pull requests are welcome, but review is strict on correctness and maintainability.
+
+Before opening a PR, ensure all of the following are true:
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+PR requirements:
+
+- Code is fully formatted with `cargo fmt`.
+- `cargo clippy` passes with zero warnings.
+- Description includes a clear architectural explanation of what changed and why.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
