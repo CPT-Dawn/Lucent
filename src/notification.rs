@@ -35,6 +35,8 @@ pub enum UiCommand {
     /// Close a notification by ID with a reason code.
     /// Reason: 1=expired, 2=dismissed by user, 3=closed by API, 4=undefined.
     Close { id: u32, reason: u32 },
+    /// Recalculate popup positions after size changes.
+    Reflow,
 }
 
 /// Signals sent from the UI thread → D-Bus thread for emission on the bus.

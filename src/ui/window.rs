@@ -192,6 +192,7 @@ impl NotificationWindow {
             self.current_top_offset.set(target_offset);
             self.window
                 .set_margin(Edge::Top, SCREEN_MARGIN + target_offset.round() as i32);
+            self.window.set_opacity(1.0);
             return;
         }
 
@@ -224,6 +225,7 @@ impl NotificationWindow {
 
             current_top_offset.set(new_offset);
             animated_window.set_margin(Edge::Top, SCREEN_MARGIN + new_offset.round() as i32);
+            animated_window.set_opacity(1.0);
 
             if progress >= 1.0 {
                 glib::ControlFlow::Break
@@ -231,6 +233,24 @@ impl NotificationWindow {
                 glib::ControlFlow::Continue
             }
         });
+    }
+
+    /// Best-effort measured height for stack layout.
+    pub fn measured_height(&self) -> i32 {
+        if let Some(child) = self.window.child() {
+            let for_size = {
+                let w = self.window.width();
+                if w > 0 {
+                    w
+                } else {
+                    -1
+                }
+            };
+            let (_, natural, _, _) = child.measure(Orientation::Vertical, for_size);
+            natural
+        } else {
+            self.window.height()
+        }
     }
 
     /// Fade out and then close the underlying GTK window.

@@ -17,8 +17,10 @@ use crate::config::Config;
 use crate::notification::{DbusSignal, Notification, UiCommand};
 use window::NotificationWindow;
 
-/// Estimated height of a notification slot (content + gap) for stacking.
-const SLOT_HEIGHT: i32 = 90;
+/// Vertical gap between stacked notifications.
+const STACK_GAP: i32 = 10;
+/// Fallback height used before a popup is fully measured.
+const FALLBACK_HEIGHT: i32 = 90;
 
 /// Shared UI state managed exclusively on the GTK main thread.
 pub struct State {
@@ -56,6 +58,7 @@ impl State {
         match cmd {
             UiCommand::Show(notification) => self.show_notification(notification),
             UiCommand::Close { id, reason } => self.close_notification(id, reason),
+            UiCommand::Reflow => self.restack(),
         }
     }
 
@@ -81,9 +84,8 @@ impl State {
             return;
         }
 
-        // Calculate vertical position.
-        let slot = self.display_order.len() as i32;
-        let top_offset = slot * SLOT_HEIGHT;
+        // Calculate vertical position based on measured heights.
+        let top_offset = self.next_top_offset();
 
         eprintln!(
             "[lucent] #{} from \"{}\" — {}",
@@ -95,6 +97,16 @@ impl State {
 
         self.display_order.push(id);
         self.active.insert(id, nw);
+
+        // Reflow once immediately and once after first layout pass to handle
+        // text wrapping and exact measured heights.
+        self.restack();
+        {
+            let ui_tx = self.ui_tx.clone();
+            glib::timeout_add_local_once(Duration::from_millis(30), move || {
+                let _ = ui_tx.send(UiCommand::Reflow);
+            });
+        }
 
         // Schedule auto-dismiss timer.
         let timeout = if expire_timeout < 0 {
@@ -137,10 +149,31 @@ impl State {
 
     /// Recalculate top offsets for all active windows after a removal.
     fn restack(&self) {
-        for (i, id) in self.display_order.iter().enumerate() {
+        let mut offset = 0;
+        for id in &self.display_order {
             if let Some(nw) = self.active.get(id) {
-                nw.set_top_offset(i as i32 * SLOT_HEIGHT);
+                nw.set_top_offset(offset);
+                offset += self.height_for_window(nw) + STACK_GAP;
             }
+        }
+    }
+
+    fn next_top_offset(&self) -> i32 {
+        let mut offset = 0;
+        for id in &self.display_order {
+            if let Some(nw) = self.active.get(id) {
+                offset += self.height_for_window(nw) + STACK_GAP;
+            }
+        }
+        offset
+    }
+
+    fn height_for_window(&self, window: &NotificationWindow) -> i32 {
+        let measured = window.measured_height();
+        if measured > 0 {
+            measured
+        } else {
+            FALLBACK_HEIGHT
         }
     }
 
