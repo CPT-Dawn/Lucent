@@ -15,29 +15,24 @@ jobs:
     container: archlinux:base-devel 
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
       - name: Install Arch System Dependencies
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm rust gtk4 gtk4-layer-shell github-cli tar git binutils gcc
-          git config --global --add safe.directory /__w/Lucent/Lucent
+          git config --global --add safe.directory '*'
+
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
       - name: Compile Lucent (Release Profile)
         run: cargo build --release --locked
 
       - name: Strip Binary & Create Tarball
         run: |
-          # Strip debug symbols to crush file size
           strip target/release/lucent
-          
-          # Create a staging directory for the tarball
           mkdir release_payload
           cp target/release/lucent release_payload/
           cp org.freedesktop.Notifications.service release_payload/
-          
-          # Compress the binary and the D-Bus file together
           cd release_payload
           tar -czvf ../lucent-x86_64.tar.gz *
 
@@ -45,7 +40,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Automatically generates the release page and attaches the .tar.gz
           gh release create ${{ github.ref_name }} \
             --title "Lucent ${{ github.ref_name }}" \
             --generate-notes \
