@@ -16,6 +16,7 @@ mod ui;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -57,20 +58,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //   UI → D-Bus:  signal emissions (NotificationClosed, ActionInvoked)
     let (dbus_tx, dbus_rx) = tokio::sync::mpsc::unbounded_channel::<notification::DbusSignal>();
 
+    //   D-Bus thread → UI: fatal startup/runtime errors
+    let (dbus_err_tx, dbus_err_rx) = std::sync::mpsc::channel::<String>();
+
     // Clone ui_tx for State (used by auto-dismiss timers & click handlers).
     let ui_tx_for_state = ui_tx.clone();
 
     // ── 4. Spawn D-Bus server on a dedicated tokio thread ───────────
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("Failed to create tokio runtime");
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = dbus_err_tx.send(format!("Failed to create tokio runtime: {e}"));
+                return;
+            }
+        };
 
         rt.block_on(async move {
             if let Err(e) = crate::dbus::run_server(ui_tx, dbus_rx).await {
-                eprintln!("[lucent] D-Bus server error: {e}");
-                std::process::exit(1);
+                let _ = dbus_err_tx.send(format!("D-Bus server error: {e}"));
             }
         });
     });
@@ -82,22 +91,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui_tx_for_state,
     )));
 
+    let main_loop = glib::MainLoop::new(None, false);
+
     // Poll the D-Bus → UI channel from within the GTK main loop.
     // 50 ms cadence is imperceptible for notification popups and avoids
     // busy-waiting while staying responsive.
     {
         let state = state.clone();
+        let main_loop = main_loop.clone();
         glib::timeout_add_local(Duration::from_millis(50), move || {
             while let Ok(cmd) = ui_rx.try_recv() {
                 state.borrow_mut().handle_command(cmd);
             }
-            glib::ControlFlow::Continue
+
+            match dbus_err_rx.try_recv() {
+                Ok(err) => {
+                    eprintln!("[lucent] {err}");
+                    eprintln!("[lucent] Shutting down due to D-Bus failure.");
+                    main_loop.quit();
+                    glib::ControlFlow::Break
+                }
+                Err(TryRecvError::Disconnected) => {
+                    eprintln!("[lucent] D-Bus thread terminated unexpectedly.");
+                    eprintln!("[lucent] Shutting down.");
+                    main_loop.quit();
+                    glib::ControlFlow::Break
+                }
+                Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
+            }
         });
     }
 
     // ── 6. Run the GTK main loop ────────────────────────────────────
     eprintln!("[lucent] Listening for notifications on D-Bus…");
-    let main_loop = glib::MainLoop::new(None, false);
     main_loop.run();
 
     Ok(())
