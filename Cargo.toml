@@ -1,10 +1,13 @@
 [package]
 name = "lucent"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Swastik Patel"]
 license = "MIT"
 description = "A blazing-fast, visually stunning Wayland notification daemon"
+repository = "https://github.com/CPT-Dawn/Lucent"
+keywords = ["wayland", "notification", "daemon", "hyprland", "dbus"]
+categories = ["gui", "system-tools"]
 
 [dependencies]
 # D-Bus server — tokio-native, no background async-io thread
@@ -23,3 +26,10 @@ gtk4-layer-shell = "0.7"
 serde = { version = "1", features = ["derive"] }
 toml = "1.0"
 directories = "6"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -17,29 +17,32 @@ fn build_css(config: &Config) -> String {
     background-color: {bg};
     border: 1px solid {border};
     border-radius: {radius}px;
-    padding: 12px 16px;
+    padding: 14px 18px;
     color: {text};
 }}
 
 .notification-summary {{
-    font-weight: bold;
-    font-size: 14px;
+    font-weight: 700;
+    font-size: 15px;
+    line-height: 1.25;
     font-family: "{font}";
     color: {text};
 }}
 
 .notification-body {{
-    font-size: 12px;
+    font-size: 13px;
+    line-height: 1.3;
     font-family: "{font}";
     color: {text};
-    opacity: 0.85;
+    opacity: 0.88;
 }}
 
 .notification-app-name {{
-    font-size: 10px;
+    font-size: 11px;
+    font-weight: 600;
     font-family: "{font}";
     color: {text};
-    opacity: 0.6;
+    opacity: 0.68;
 }}
 "#,
         bg = config.background_color,
