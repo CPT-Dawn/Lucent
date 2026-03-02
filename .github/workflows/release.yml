@@ -21,8 +21,8 @@ jobs:
       - name: Install Arch System Dependencies
         run: |
           pacman -Syu --noconfirm
-          # ADDED git, binutils, and gcc here
           pacman -S --noconfirm rust gtk4 gtk4-layer-shell github-cli tar git binutils gcc
+          git config --global --add safe.directory /__w/Lucent/Lucent
 
       - name: Compile Lucent (Release Profile)
         run: cargo build --release --locked
