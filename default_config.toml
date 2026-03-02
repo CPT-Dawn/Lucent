@@ -1,6 +1,6 @@
 # ╔══════════════════════════════════════════════════════════════════╗
 # ║                      Lucent Configuration                        ║
-# ║            Wayland Notification Daemon — Default Theme           ║
+# ║                   Wayland Notification Daemon                    ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # This file is auto-generated on first launch.
@@ -35,7 +35,7 @@ corner_radius = 12
 
 # Font family for all notification text.
 # Falls back to the system default if unavailable.
-font_family = "JetBrains Mono"
+font_family = "Geist"
 
 # ── Stacking ─────────────────────────────────────────────────────
 
