@@ -36,7 +36,7 @@ Legacy notification daemons were largely shaped by X11-era assumptions: long-liv
 ### Arch Linux (AUR)
 
 ```bash
-yay -S lucent-git
+paru -S lucent-git
 ```
 
 The package installs both:
