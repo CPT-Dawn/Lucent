@@ -22,6 +22,18 @@ use std::time::Duration;
 use gtk4::glib;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // ── 0. Single-instance guard for notification bus name ──────────
+    let owner = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(crate::dbus::notifications_name_owner())?;
+
+    if let Some(owner) = owner {
+        eprintln!("[lucent] Another notification daemon is already running (owner: {owner}).");
+        eprintln!("[lucent] Exiting without error. Stop the existing daemon to run this instance.");
+        return Ok(());
+    }
+
     // ── 1. Initialize GTK4 ──────────────────────────────────────────
     gtk4::init()?;
 

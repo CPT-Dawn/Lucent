@@ -9,11 +9,15 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::mpsc::UnboundedSender;
+use zbus::fdo::DBusProxy;
 use zbus::interface;
+use zbus::names::BusName;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::OwnedValue;
 
 use crate::notification::{DbusSignal, Notification, UiCommand};
+
+const NOTIFICATION_BUS_NAME: &str = "org.freedesktop.Notifications";
 
 /// The notification server object exposed at
 /// `/org/freedesktop/Notifications` on the session bus.
@@ -148,12 +152,12 @@ pub async fn run_server(
     let server = NotificationServer::new(ui_tx);
 
     let conn = zbus::connection::Builder::session()?
-        .name("org.freedesktop.Notifications")?
+        .name(NOTIFICATION_BUS_NAME)?
         .serve_at("/org/freedesktop/Notifications", server)?
         .build()
         .await?;
 
-    eprintln!("[lucent] D-Bus name claimed: org.freedesktop.Notifications");
+    eprintln!("[lucent] D-Bus name claimed: {NOTIFICATION_BUS_NAME}");
 
     // Obtain signal emitter for the served interface.
     let iface_ref = conn
@@ -180,4 +184,18 @@ pub async fn run_server(
 
     eprintln!("[lucent] D-Bus signal channel closed");
     Ok(())
+}
+
+/// Returns the unique bus owner of `org.freedesktop.Notifications` if present.
+pub async fn notifications_name_owner() -> zbus::Result<Option<String>> {
+    let conn = zbus::Connection::session().await?;
+    let proxy = DBusProxy::new(&conn).await?;
+    let bus_name = BusName::try_from(NOTIFICATION_BUS_NAME)?;
+
+    if proxy.name_has_owner(bus_name.clone()).await? {
+        let owner = proxy.get_name_owner(bus_name).await?;
+        Ok(Some(owner.to_string()))
+    } else {
+        Ok(None)
+    }
 }
