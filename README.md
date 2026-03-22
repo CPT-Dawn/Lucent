@@ -22,32 +22,14 @@ Compared to legacy X11-era notification daemons (long-lived background services 
 > [!WARNING]
 > Lucent requires a Wayland session and layer-shell support through the GTK4/layer-shell stack.
 
-## Installation (The Deployment Trinity)
+## Installation
 
 ### Arch Linux (AUR)
 
-#### `lucent-bin` (Recommended)
-
-Pre-compiled release artifacts for fastest installation.
-
-```bash
-paru -S lucent-bin
-```
-
 #### `lucent`
-
-Stable tagged release, compiled locally from source.
 
 ```bash
 paru -S lucent
-```
-
-#### `lucent-git`
-
-Development package tracking the upstream `master` branch.
-
-```bash
-paru -S lucent-git
 ```
 
 All packages install:
@@ -128,7 +110,7 @@ dbus-send --session --type=method_call --print-reply \
   /org/freedesktop/Notifications \
   org.freedesktop.Notifications.Notify \
   string:"manual-test" uint32:0 string:"" string:"Summary" string:"Body" \
-  array:string:"" dict:string:string:"" int32:5000
+  array:string:"" dict:string:variant:"" int32:5000
 ```
 
 CLI surface:
