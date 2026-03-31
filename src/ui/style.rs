@@ -11,11 +11,25 @@ use crate::config::Config;
 
 /// Build the CSS stylesheet from user configuration values.
 fn build_css(config: &Config) -> String {
+    let border_rule = if config.border_width == 0 {
+        "border: none;".to_string()
+    } else {
+        format!(
+            "border: {}px solid {};",
+            config.border_width, config.border_color
+        )
+    };
+
     format!(
         r#"
+.lucent-window {{
+    background-color: transparent;
+    box-shadow: none;
+}}
+
 .notification-popup {{
     background-color: {bg};
-    border: 1px solid {border};
+    {border_rule}
     border-radius: {radius}px;
     padding: 14px 18px;
     color: {text};
@@ -46,7 +60,7 @@ fn build_css(config: &Config) -> String {
 }}
 "#,
         bg = config.background_color,
-        border = config.border_color,
+        border_rule = border_rule,
         text = config.text_color,
         radius = config.corner_radius,
         font = config.font_family,

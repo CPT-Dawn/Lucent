@@ -23,6 +23,9 @@ pub struct Config {
     pub background_color: String,
     /// Border color (hex).
     pub border_color: String,
+    /// Border width in pixels (`0` disables the border entirely).
+    #[serde(default = "default_border_width")]
+    pub border_width: u32,
     /// Text color (hex).
     pub text_color: String,
     /// Corner radius in pixels.
@@ -31,6 +34,10 @@ pub struct Config {
     pub font_family: String,
     /// Maximum notifications visible at once; extras are queued.
     pub max_visible_notifications: u32,
+}
+
+fn default_border_width() -> u32 {
+    1
 }
 
 /// Resolve the config file path: `$XDG_CONFIG_HOME/lucent/config.toml`

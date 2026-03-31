@@ -57,6 +57,7 @@ impl NotificationWindow {
         let window = Window::new();
         window.set_decorated(false);
         window.set_resizable(false);
+        window.add_css_class("lucent-window");
 
         // ── Layer-shell configuration ────────────────────────────
         window.init_layer_shell();

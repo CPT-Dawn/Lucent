@@ -25,6 +25,10 @@ background_color = "#0D0B14E6"
 # Subtle luminous border to separate stacked notifications.
 border_color = "#1A1525"
 
+# Border thickness in pixels.
+# Set to 0 for no border (recommended when compositor blur is enabled).
+border_width = 1
+
 # Soft off-white text for readability on dark backgrounds.
 text_color = "#E8E2F0"
 
@@ -35,7 +39,7 @@ corner_radius = 12
 
 # Font family for all notification text.
 # Falls back to the system default if unavailable.
-font_family = "Geist"
+font_family = "Inter"
 
 # ── Stacking ─────────────────────────────────────────────────────
 

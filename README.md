@@ -81,6 +81,9 @@ background_color = "#0D0B14E6"
 # Border color (hex).
 border_color = "#1A1525"
 
+# Border width in px (0 disables border).
+border_width = 1
+
 # Text color (hex).
 text_color = "#E8E2F0"
 
@@ -93,6 +96,56 @@ font_family = "Geist"
 # Max visible notifications before queueing.
 max_visible_notifications = 5
 ```
+
+## Blur And Borderless Popups (Hyprland + Wayland)
+
+Lucent renders translucent GTK layer-shell windows. The actual blur effect is
+provided by your Wayland compositor, not by Lucent itself.
+
+### 1) Tune Lucent for blur-friendly visuals
+
+Set these values in `~/.config/lucent/config.toml`:
+
+```toml
+# Keep alpha in background color (last 2 hex digits), e.g. E6 = 90% opacity.
+background_color = "#0D0B14E6"
+
+# Remove sharp outline for a cleaner blurred card look.
+border_width = 0
+```
+
+If your popup looks too opaque, reduce alpha (for example `CC` instead of `E6`).
+
+### 2) Hyprland configuration
+
+In your Hyprland config (`~/.config/hypr/hyprland.conf`), ensure blur is enabled
+and apply layer rules to Lucent's namespace (`lucent-notification`):
+
+```ini
+decoration {
+  blur {
+    enabled = true
+    size = 8
+    passes = 3
+    ignore_opacity = false
+  }
+}
+
+layerrule = blur, lucent-notification
+layerrule = ignorealpha 0.15, lucent-notification
+```
+
+Then reload Hyprland:
+
+```bash
+hyprctl reload
+```
+
+### 3) Other Wayland compositors
+
+Use your compositor's blur and layer-surface/window rules targeting the
+`lucent-notification` namespace/app class equivalent. Keep Lucent background
+translucent and set `border_width = 0` if you want a fully soft-edge style.
 
 ## Usage & IPC
 
