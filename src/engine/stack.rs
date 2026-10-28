@@ -234,4 +234,61 @@ mod tests {
             .expect("3 should be shown");
         assert_eq!(popup.notification.summary, "new");
     }
+
+    #[test]
+    fn a_replaced_waiting_notification_keeps_its_place_in_line() {
+        let mut h = two_visible();
+        for id in 1..=4 {
+            h.notify(notification(id));
+        }
+
+        let replaced = h.notify(notification(3).progress(80));
+        let first = h.send(Event::UserDismissed(1));
+        let second = h.send(Event::UserDismissed(2));
+
+        assert!(
+            replaced.is_empty(),
+            "nothing on screen changes: {replaced:?}"
+        );
+        assert_eq!(shown(&first), [3]);
+        assert_eq!(shown(&second), [4]);
+    }
+
+    #[test]
+    fn a_waiting_notification_shows_its_latest_progress_and_a_full_timeout() {
+        let mut h = Harness::with_config(EngineConfig {
+            max_visible: 1,
+            ..Default::default()
+        });
+        h.notify(notification(1));
+        h.notify(notification(2).progress(10));
+        h.advance(secs(2));
+        h.notify(notification(2).progress(90));
+
+        let promoted = h.advance(secs(3));
+
+        let popup = promoted
+            .iter()
+            .find_map(|e| match e {
+                crate::engine::Effect::ShowPopup(p) => Some(p.clone()),
+                _ => None,
+            })
+            .expect("2 should be shown");
+        assert_eq!(popup.notification.hints.progress, Some(90));
+        assert!(h.advance(millis(4_999)).is_empty());
+        assert_eq!(closed(&h.advance(millis(1))), [(2, CloseReason::Expired)]);
+    }
+
+    #[test]
+    fn an_unknown_id_arriving_while_the_stack_is_full_waits_in_overflow() {
+        let mut h = two_visible();
+        h.notify(notification(1));
+        h.notify(notification(2));
+
+        let effects = h.notify(notification(42).progress(5));
+
+        assert!(shown(&effects).is_empty());
+        assert!(updated(&effects).is_empty());
+        assert_eq!(overflow_count(&effects), Some(1));
+    }
 }
