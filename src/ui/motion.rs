@@ -78,6 +78,8 @@ pub const REFLOW: (Duration, CubicBezier) = (
 );
 /// CSS `ease`, used by the progress ring.
 pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.0);
+/// The progress ring glides to each new value.
+pub const RING: (Duration, CubicBezier) = (Duration::from_millis(350), EASE);
 
 /// Scale a Popup starts entering from.
 pub const ENTER_SCALE: f64 = 0.97;
@@ -116,9 +118,9 @@ impl Tween {
         }
     }
 
-    /// A tween that has already arrived at `value`.
+    /// A tween that has already arrived at `value`, whatever the time.
     pub fn settled(value: f64) -> Self {
-        Self::new(value, value, 0, (REDUCED, EASE), true)
+        Self::new(value, value, i64::MIN / 2, (REDUCED, EASE), true)
     }
 
     pub fn value(&self, now_us: i64) -> f64 {
@@ -192,6 +194,15 @@ mod tests {
         let tween = Tween::new(0.0, 100.0, 0, ENTER, true);
         assert!(tween.done(1_000));
         assert_eq!(tween.value(1_000), 100.0);
+    }
+
+    #[test]
+    fn a_settled_tween_is_done_at_any_frame_time() {
+        let tween = Tween::settled(3.0);
+        for now in [0, 1, 1_000_000_000] {
+            assert!(tween.done(now), "{now}");
+            assert_eq!(tween.value(now), 3.0);
+        }
     }
 
     #[test]

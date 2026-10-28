@@ -142,6 +142,84 @@ mod tests {
     }
 
     #[test]
+    fn a_progress_update_changes_the_popup_in_place_and_restarts_its_countdown() {
+        let mut h = Harness::new();
+        h.notify(notification(1).summary("Downloading").progress(20));
+        h.advance(secs(3));
+
+        let effects = h.notify(notification(1).summary("Downloading").progress(64));
+
+        assert!(removed(&effects).is_empty(), "{effects:?}");
+        assert!(shown(&effects).is_empty(), "{effects:?}");
+        assert_eq!(overflow_count(&effects), None, "{effects:?}");
+        let Some(Effect::UpdatePopup(popup)) = effects.first() else {
+            panic!("expected an update, got {effects:?}");
+        };
+        assert_eq!(popup.notification.hints.progress, Some(64));
+        assert_eq!(popup.timeout, Some(secs(5)));
+        assert_eq!(popup.received_at, crate::engine::Clock::now(&h.clock));
+        assert!(effects.contains(&Effect::ScheduleTimer {
+            timer: crate::engine::Timer::Expire(1),
+            after: secs(5),
+        }));
+    }
+
+    #[test]
+    fn repeated_progress_updates_keep_one_popup_until_the_last_one_expires() {
+        let mut h = Harness::new();
+        h.notify(notification(1).progress(0));
+
+        let mut effects = Vec::new();
+        for percent in [25, 50, 75, 100] {
+            effects.extend(h.advance(secs(4)));
+            effects.extend(h.notify(notification(1).progress(percent)));
+        }
+
+        assert!(closed(&effects).is_empty(), "{effects:?}");
+        assert!(shown(&effects).is_empty(), "{effects:?}");
+        assert_eq!(updated(&effects), [1, 1, 1, 1]);
+        assert!(h.advance(millis(4_999)).is_empty());
+        assert_eq!(closed(&h.advance(millis(1))), [(1, CloseReason::Expired)]);
+    }
+
+    #[test]
+    fn replacing_an_older_popup_keeps_its_place_in_the_stack() {
+        let mut h = Harness::new();
+        h.notify(notification(1));
+        h.notify(notification(2));
+
+        h.notify(notification(1).progress(50));
+
+        assert_eq!(h.engine.newest_popup(), Some(2));
+    }
+
+    #[test]
+    fn a_notification_replacing_an_unknown_id_is_shown_as_new() {
+        let mut h = Harness::new();
+        h.notify(notification(1));
+
+        let effects = h.notify(notification(42).progress(10));
+
+        assert_eq!(shown(&effects), [42]);
+        assert!(updated(&effects).is_empty());
+        assert!(closed(&effects).is_empty());
+        assert_eq!(h.engine.newest_popup(), Some(42));
+    }
+
+    #[test]
+    fn a_notification_reusing_a_closed_id_is_shown_as_new() {
+        let mut h = Harness::new();
+        h.notify(notification(1).progress(10));
+        h.send(Event::UserDismissed(1));
+
+        let effects = h.notify(notification(1).progress(20));
+
+        assert_eq!(shown(&effects), [1]);
+        assert!(updated(&effects).is_empty());
+        assert!(closed(&effects).is_empty());
+    }
+
+    #[test]
     fn dismissing_all_closes_every_popup_and_overflow() {
         let mut h = Harness::with_config(crate::engine::EngineConfig {
             max_visible: 1,

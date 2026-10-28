@@ -5,8 +5,8 @@
 //! ├─ content (vertical Box, rebuilt when the Notification is replaced)
 //! │  ├─ .top: media │ main
 //! │  │   media: Overlay around the 42px tile, 5px larger on each side so the
-//! │  │          app badge (and the progress ring, #7) can overhang it
-//! │  │   main:  .head (.app · .time) / .summary / .body (3 lines)
+//! │  │          progress ring and the app badge can overhang it
+//! │  │   main:  .head (.app · .time or .pct) / .summary / .body (3 lines)
 //! │  └─ .actions: one button per Action but "default", the first .primary
 //! ├─ button.close (top right, shown on hover)
 //! └─ countdown line (bottom edge)
@@ -20,7 +20,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gtk4::prelude::*;
-use gtk4::{Align, Box as GtkBox, Label, Orientation, Overlay, gdk, gio, glib, pango};
+use gtk4::{Align, Box as GtkBox, DrawingArea, Label, Orientation, Overlay, gdk, gio, glib, pango};
 use lucent::engine::{Action, Event, Notification, NotificationId, Popup, Urgency};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -28,6 +28,8 @@ use super::ago::{ago, until_change};
 use super::countdown::Countdown;
 use super::icon::{self, Art, Source};
 use super::markup::{body_markup, escape};
+use super::progress::{self, Geometry, Ring};
+use super::stack::reduced_motion;
 use super::theme::{Look, Rgba, Theme};
 use super::widgets::{Fit, Tile};
 
@@ -50,7 +52,14 @@ struct Shared {
     notification: RefCell<Notification>,
     countdown: RefCell<Option<Countdown>>,
     ticking: Cell<bool>,
-    line: gtk4::DrawingArea,
+    line: DrawingArea,
+    /// The progress ring's value, while the Notification has one.
+    ring: RefCell<Option<Ring>>,
+    ring_ticking: Cell<bool>,
+    /// Kept across replacements, so a new value glides from the old one.
+    ring_area: DrawingArea,
+    /// The header's "· N%", which counts along with the ring.
+    percent: RefCell<Option<Label>>,
     look: Look,
     theme: Rc<RefCell<Theme>>,
 }
@@ -92,6 +101,10 @@ impl Card {
             countdown: RefCell::new(None),
             ticking: Cell::new(false),
             line,
+            ring: RefCell::new(None),
+            ring_ticking: Cell::new(false),
+            ring_area: ring_area(),
+            percent: RefCell::new(None),
             look: look.clone(),
             theme: theme.clone(),
         });
@@ -112,6 +125,22 @@ impl Card {
                 };
                 draw_line(cr, width, height, fraction, &shared.theme.borrow());
             });
+        }
+        {
+            // Like the line, the ring reads the Theme at draw time.
+            let weak = Rc::downgrade(&shared);
+            shared
+                .ring_area
+                .set_draw_func(move |area, cr, width, height| {
+                    let Some(shared) = weak.upgrade() else {
+                        return;
+                    };
+                    let Some(ring) = *shared.ring.borrow() else {
+                        return;
+                    };
+                    let fraction = ring.fraction(frame_time(area));
+                    draw_ring(cr, width.min(height), fraction, &shared.theme.borrow());
+                });
         }
 
         let hover = gtk4::EventControllerMotion::new();
@@ -166,6 +195,7 @@ impl Card {
     /// Repaint the cairo-drawn parts, which read the Theme at draw time.
     pub fn redraw(&self) {
         self.shared.line.queue_draw();
+        self.shared.ring_area.queue_draw();
     }
 
     /// Show a replaced Notification in place; its countdown starts over.
@@ -202,8 +232,11 @@ impl Card {
             Urgency::Normal => {}
         }
 
+        let ring = self.set_progress(n.hints.progress);
         let content = GtkBox::new(Orientation::Vertical, 0);
-        content.append(&top_row(popup, look));
+        let (top, percent) = top_row(popup, look, ring);
+        content.append(&top);
+        *self.shared.percent.borrow_mut() = percent;
         if let Some(actions) = action_row(n, &self.events) {
             content.append(&actions);
         }
@@ -216,6 +249,28 @@ impl Card {
         self.shared.line.set_visible(countdown.is_some());
         *self.shared.countdown.borrow_mut() = countdown;
         tick(&self.shared);
+        tick_ring(&self.shared);
+    }
+
+    /// Point the ring at a new value: a new ring shows its value at once,
+    /// a replaced one glides there. Gives back the ring's widget, ready to
+    /// go into the new media box, if there is progress to show.
+    fn set_progress(&self, percent: Option<u8>) -> Option<&DrawingArea> {
+        let area = &self.shared.ring_area;
+        if let Some(media) = area.parent().and_downcast::<Overlay>() {
+            media.remove_overlay(area);
+        }
+        let mut ring = self.shared.ring.borrow_mut();
+        *ring = match (*ring, percent) {
+            (Some(mut ring), Some(percent)) => {
+                ring.set(percent, frame_time(area), reduced_motion());
+                Some(ring)
+            }
+            (None, Some(percent)) => Some(Ring::new(percent)),
+            (_, None) => None,
+        };
+        area.queue_draw();
+        ring.is_some().then_some(area)
     }
 }
 
@@ -271,8 +326,98 @@ fn tick(shared: &Rc<Shared>) {
     });
 }
 
-fn countdown_line() -> gtk4::DrawingArea {
-    let line = gtk4::DrawingArea::new();
+/// Redraw the ring and its percentage every frame while it glides.
+fn tick_ring(shared: &Rc<Shared>) {
+    let now = frame_time(&shared.ring_area);
+    let animating = shared.ring.borrow().is_some_and(|r| r.animating(now));
+    show_percent(shared, now);
+    if !animating || shared.ring_ticking.replace(true) {
+        return;
+    }
+    let weak = Rc::downgrade(shared);
+    shared.ring_area.add_tick_callback(move |area, clock| {
+        let Some(shared) = weak.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let now = clock.frame_time();
+        area.queue_draw();
+        show_percent(&shared, now);
+        if shared.ring.borrow().is_some_and(|r| r.animating(now)) {
+            glib::ControlFlow::Continue
+        } else {
+            shared.ring_ticking.set(false);
+            glib::ControlFlow::Break
+        }
+    });
+}
+
+fn show_percent(shared: &Shared, now: i64) {
+    if let (Some(ring), Some(label)) = (*shared.ring.borrow(), shared.percent.borrow().as_ref()) {
+        label.set_text(&progress::header_text(ring.percent(now)));
+    }
+}
+
+/// The frame clock's time, or the same clock read directly before the
+/// widget is on screen.
+fn frame_time(widget: &impl IsA<gtk4::Widget>) -> i64 {
+    widget
+        .frame_clock()
+        .map_or_else(glib::monotonic_time, |clock| clock.frame_time())
+}
+
+fn ring_area() -> DrawingArea {
+    let area = DrawingArea::new();
+    area.add_css_class("ring");
+    area.set_can_target(false);
+    area
+}
+
+/// The ring in the chip colour, then `fraction` of it in a diagonal
+/// accent-1 to accent-2 gradient, from just right of the top-left corner,
+/// clockwise.
+fn draw_ring(cr: &gtk4::cairo::Context, side: i32, fraction: f64, theme: &Theme) {
+    let ring = Geometry::for_box(side);
+    rounded_square(cr, &ring);
+    cr.set_line_width(ring.stroke);
+    let (r, g, b, a) = theme.chip.components();
+    cr.set_source_rgba(r, g, b, a);
+    let _ = cr.stroke();
+
+    let Some((on, off)) = ring.dash(fraction) else {
+        return;
+    };
+    let side = f64::from(side);
+    let gradient = gtk4::cairo::LinearGradient::new(0.0, 0.0, side, side);
+    for (offset, colour) in [(0.0, theme.accent_1), (1.0, theme.accent_2)] {
+        let (r, g, b, a) = colour.components();
+        gradient.add_color_stop_rgba(offset, r, g, b, a);
+    }
+    rounded_square(cr, &ring);
+    let _ = cr.set_source(&gradient);
+    cr.set_line_cap(gtk4::cairo::LineCap::Round);
+    cr.set_dash(&[on, off], 0.0);
+    let _ = cr.stroke();
+}
+
+/// The ring's centre line, starting at the end of the top-left corner.
+fn rounded_square(cr: &gtk4::cairo::Context, ring: &Geometry) {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let (x, y, s, r) = (ring.inset, ring.inset, ring.side, ring.radius);
+    cr.new_path();
+    cr.move_to(x + r, y);
+    cr.line_to(x + s - r, y);
+    cr.arc(x + s - r, y + r, r, -FRAC_PI_2, 0.0);
+    cr.line_to(x + s, y + s - r);
+    cr.arc(x + s - r, y + s - r, r, 0.0, FRAC_PI_2);
+    cr.line_to(x + r, y + s);
+    cr.arc(x + r, y + s - r, r, FRAC_PI_2, PI);
+    cr.line_to(x, y + r);
+    cr.arc(x + r, y + r, r, PI, 1.5 * PI);
+    cr.close_path();
+}
+
+fn countdown_line() -> DrawingArea {
+    let line = DrawingArea::new();
     line.add_css_class("countdown");
     line.set_content_height(LINE_HEIGHT);
     line.set_valign(Align::End);
@@ -301,8 +446,9 @@ fn draw_line(cr: &gtk4::cairo::Context, width: i32, height: i32, fraction: f64, 
     let _ = cr.fill();
 }
 
-/// The icon tile and the text column.
-fn top_row(popup: &Popup, look: &Look) -> GtkBox {
+/// The icon tile (with the progress ring, if any) and the text column.
+/// Also gives back the header's percentage label, if there is one.
+fn top_row(popup: &Popup, look: &Look, ring: Option<&DrawingArea>) -> (GtkBox, Option<Label>) {
     // The media box is 5px larger than the tile on every side, so the
     // padding and spacing are 5px smaller than the design's 14/12px.
     let overhang = look.tile_overhang();
@@ -312,14 +458,15 @@ fn top_row(popup: &Popup, look: &Look) -> GtkBox {
     top.set_margin_start(14 - overhang);
     top.set_margin_end(14);
     top.set_margin_bottom(13 - overhang);
-    top.append(&media(&popup.notification, look));
-    top.append(&main_column(popup, overhang));
-    top
+    top.append(&media(&popup.notification, look, ring));
+    let (main, percent) = main_column(popup, overhang);
+    top.append(&main);
+    (top, percent)
 }
 
-/// The icon tile, with the app badge when an image takes the tile. #7
-/// overlays the progress ring here.
-fn media(n: &Notification, look: &Look) -> Overlay {
+/// The icon tile, ringed by the progress ring when there is one, with the
+/// app badge on top when an image takes the tile.
+fn media(n: &Notification, look: &Look, ring: Option<&DrawingArea>) -> Overlay {
     let side = look.tile + 2 * look.tile_overhang();
     let media = Overlay::new();
     media.add_css_class("media");
@@ -340,10 +487,15 @@ fn media(n: &Notification, look: &Look) -> Overlay {
     match (&art, &icon) {
         (Some(art), _) => tile.set_paintable(art, Fit::Cover),
         (None, Some(icon)) => tile.set_paintable(icon, Fit::Contain(look.icon_size as f32)),
-        (None, None) => return fallback_media(media, tile, &n.app_name),
+        (None, None) => fallback_tile(&media, &tile, &n.app_name),
     }
     media.set_child(Some(&tile));
+    if let Some(ring) = ring {
+        media.add_overlay(ring);
+    }
 
+    // The badge sits over the ring: its background-coloured edge cuts a
+    // clean gap where the two meet.
     if let (Some(_), Some(icon)) = (&art, &icon) {
         let badge = Tile::new(look.badge(), 6.0);
         badge.add_css_class("badge");
@@ -356,7 +508,7 @@ fn media(n: &Notification, look: &Look) -> Overlay {
 }
 
 /// A tile in the app's own hue with its initial, for apps without an icon.
-fn fallback_media(media: Overlay, tile: Tile, app_name: &str) -> Overlay {
+fn fallback_tile(media: &Overlay, tile: &Tile, app_name: &str) {
     let hue = icon::hue(app_name);
     let rgba = |c: Rgba| {
         let (r, g, b, a) = c.components();
@@ -367,7 +519,6 @@ fn fallback_media(media: Overlay, tile: Tile, app_name: &str) -> Overlay {
         rgba(Rgba::hsl(hue, 0.8, 0.62)),
         rgba(Rgba::hsl(hue + 30.0, 0.7, 0.46)),
     );
-    media.set_child(Some(&tile));
     let letter = Label::new(Some(&icon::initial(app_name)));
     letter.add_css_class("tile");
     letter.add_css_class("fallback");
@@ -375,7 +526,6 @@ fn fallback_media(media: Overlay, tile: Tile, app_name: &str) -> Overlay {
     letter.set_valign(Align::Center);
     letter.set_can_target(false);
     media.add_overlay(&letter);
-    media
 }
 
 /// Load an icon or image at `size` pixels; `None` if it can't be found.
@@ -432,8 +582,9 @@ fn texture_from_pixels(data: &lucent::engine::ImageData) -> Option<gdk::Paintabl
     Some(texture.upcast())
 }
 
-/// App name and time, summary, body.
-fn main_column(popup: &Popup, overhang: i32) -> GtkBox {
+/// App name and time (or progress), summary, body. Also gives back the
+/// progress label, if there is one.
+fn main_column(popup: &Popup, overhang: i32) -> (GtkBox, Option<Label>) {
     let n = &popup.notification;
     let main = GtkBox::new(Orientation::Vertical, 3);
     main.add_css_class("main");
@@ -451,10 +602,22 @@ fn main_column(popup: &Popup, overhang: i32) -> GtkBox {
     app.set_ellipsize(pango::EllipsizeMode::End);
     app.set_valign(Align::BaselineCenter);
     head.append(&app);
-    let time = label("", "time");
-    time.set_valign(Align::BaselineCenter);
-    keep_time_fresh(&time, popup.received_at);
-    head.append(&time);
+    // With progress, the percentage takes the time's place.
+    let percent = match n.hints.progress {
+        Some(percent) => {
+            let label = label(&progress::header_text(percent), "pct");
+            label.set_valign(Align::BaselineCenter);
+            head.append(&label);
+            Some(label)
+        }
+        None => {
+            let time = label("", "time");
+            time.set_valign(Align::BaselineCenter);
+            keep_time_fresh(&time, popup.received_at);
+            head.append(&time);
+            None
+        }
+    };
     main.append(&head);
 
     if !n.summary.is_empty() {
@@ -488,7 +651,7 @@ fn main_column(popup: &Popup, overhang: i32) -> GtkBox {
         }
         main.append(&body);
     }
-    main
+    (main, percent)
 }
 
 fn label(text: &str, class: &str) -> Label {
