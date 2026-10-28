@@ -13,7 +13,12 @@ pub struct IdAllocator(Arc<AtomicU32>);
 
 impl IdAllocator {
     pub fn new() -> Self {
-        Self(Arc::new(AtomicU32::new(1)))
+        Self::starting_at(1)
+    }
+
+    /// An allocator whose first id is `first` (0 is skipped).
+    pub fn starting_at(first: NotificationId) -> Self {
+        Self(Arc::new(AtomicU32::new(first)))
     }
 
     /// The next unused id. Skips 0 if the counter ever wraps.
