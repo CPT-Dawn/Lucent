@@ -10,9 +10,11 @@ mod check;
 mod clear;
 mod daemon;
 mod dismiss;
+mod dnd;
 mod history;
 mod reload;
 mod restore;
+mod status;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,6 +66,35 @@ pub enum Command {
     },
     /// Empty History.
     Clear,
+    /// Switch Do Not Disturb, or show whether it is on.
+    ///
+    /// While it is on, Notifications go to History without a Popup, except
+    /// Critical ones (unless `allow_critical = false` in `[dnd]`). It is
+    /// always off when Lucent starts.
+    Dnd {
+        /// on, off or toggle (default: just show the current state).
+        #[arg(value_enum)]
+        change: Option<DndChange>,
+    },
+    /// Print the History count and Do Not Disturb state as JSON.
+    ///
+    /// The line is ready for a Waybar custom module with `return-type:
+    /// json`: `text` (the count), `alt` and `class` (`none`,
+    /// `notification`, `dnd-none` or `dnd-notification`) and `tooltip`,
+    /// plus the raw `count` and `dnd`.
+    Status {
+        /// Keep running and print a new line whenever the status changes.
+        #[arg(long)]
+        follow: bool,
+    },
+}
+
+/// How `lucent dnd` changes Do Not Disturb.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum DndChange {
+    On,
+    Off,
+    Toggle,
 }
 
 impl Command {
@@ -75,6 +106,8 @@ impl Command {
             Self::Restore { id } => restore::run(id),
             Self::History { json } => history::run(json),
             Self::Clear => clear::run(),
+            Self::Dnd { change } => dnd::run(change),
+            Self::Status { follow } => status::run(follow),
         }
     }
 }
