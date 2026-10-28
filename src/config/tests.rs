@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use super::*;
+use crate::engine::{Pattern, Rule, RuleTimeout, Urgency};
 
 fn ok(text: &str) -> Parsed {
     parse(text).unwrap_or_else(|rejected| panic!("rejected: {rejected:#?}"))
@@ -312,9 +313,156 @@ fn unknown_keys_warn_with_their_position_and_are_ignored() {
     assert_eq!(w[2].help, None);
 }
 
+// ── Rules ──
+
+fn rules(text: &str) -> Vec<Rule> {
+    config(text).rules.0
+}
+
 #[test]
-fn rules_are_left_for_the_rules_feature_without_warnings() {
-    config("[[rule]]\napp = \"discord\"\nsummary = \"*is typing*\"\nhide = true\n");
+fn no_rules_by_default() {
+    assert_eq!(config("").rules, Rules::default());
+}
+
+#[test]
+fn a_rule_parses_its_patterns_and_effects() {
+    let r = rules(
+        "[[rule]]\napp = \"discord\"\nsummary = \"*is typing*\"\nhide = true\nhistory = false\n",
+    );
+
+    assert_eq!(
+        r,
+        [Rule {
+            app: Some(Pattern::new("discord")),
+            summary: Some(Pattern::new("*is typing*")),
+            hide: true,
+            history: false,
+            ..Rule::default()
+        }]
+    );
+}
+
+#[test]
+fn a_rule_can_set_a_timeout_in_seconds_with_zero_meaning_never() {
+    let r = rules(
+        "[[rule]]\napp = \"spotify\"\ntimeout = 2\n[[rule]]\napp = \"a\"\ntimeout = 0.5\n[[rule]]\napp = \"b\"\ntimeout = 0\n",
+    );
+
+    assert_eq!(
+        r[0].timeout,
+        Some(RuleTimeout::After(Duration::from_secs(2)))
+    );
+    assert_eq!(
+        r[1].timeout,
+        Some(RuleTimeout::After(Duration::from_millis(500)))
+    );
+    assert_eq!(r[2].timeout, Some(RuleTimeout::Never));
+}
+
+#[test]
+fn a_rule_can_set_any_urgency_in_any_case() {
+    let r = rules(
+        "[[rule]]\napp = \"a\"\nurgency = \"low\"\n[[rule]]\napp = \"b\"\nurgency = \"Normal\"\n[[rule]]\napp = \"c\"\nurgency = \"CRITICAL\"\n",
+    );
+
+    let urgencies: Vec<_> = r.iter().map(|r| r.urgency).collect();
+    assert_eq!(
+        urgencies,
+        [
+            Some(Urgency::Low),
+            Some(Urgency::Normal),
+            Some(Urgency::Critical)
+        ]
+    );
+}
+
+#[test]
+fn rules_keep_their_file_order() {
+    let r = rules(
+        "[[rule]]\napp = \"first\"\nhide = true\n[[rule]]\nsummary = \"second\"\nhide = true\n",
+    );
+
+    assert_eq!(r[0].app, Some(Pattern::new("first")));
+    assert_eq!(r[1].summary, Some(Pattern::new("second")));
+}
+
+#[test]
+fn rules_written_as_an_inline_list_work_too() {
+    let r = rules("rule = [{ app = \"spotify\", timeout = 2 }]\n");
+
+    assert_eq!(r[0].app, Some(Pattern::new("spotify")));
+}
+
+#[test]
+fn the_engine_gets_the_rules() {
+    let c = config("[[rule]]\napp = \"slack\"\nurgency = \"critical\"\n");
+
+    assert_eq!(c.engine_config().rules, c.rules);
+}
+
+#[test]
+fn a_rule_with_nothing_to_match_is_an_error() {
+    let e = error("[[rule]]\nhide = true\n");
+
+    assert_eq!(e.line, 1);
+    assert!(e.message.contains("matches nothing"), "{}", e.message);
+    assert!(e.help.unwrap().contains("app = "));
+}
+
+#[test]
+fn an_unknown_urgency_in_a_rule_is_an_error_with_a_suggestion() {
+    let e = error("[[rule]]\napp = \"slack\"\nurgency = \"critcal\"\n");
+
+    assert_eq!((e.line, e.column), (3, 11));
+    assert!(e.help.unwrap().contains("\"critical\""));
+}
+
+#[test]
+fn a_rule_value_of_the_wrong_type_is_an_error() {
+    let e = errors(
+        "[[rule]]\napp = 3\n[[rule]]\napp = \"x\"\nhide = \"yes\"\n[[rule]]\napp = \"y\"\ntimeout = \"2s\"\n",
+    );
+    let lines: Vec<_> = e.iter().map(|e| e.line).collect();
+
+    assert_eq!(lines, [2, 5, 8]);
+}
+
+#[test]
+fn an_unknown_field_in_a_rule_warns_with_a_suggestion() {
+    let w = ok("[[rule]]\napp = \"discord\"\nhid = true\n").warnings;
+
+    assert_eq!(w.len(), 2, "{w:#?}");
+    assert!(w[0].message.contains("changes nothing"), "{}", w[0].message);
+    assert_eq!((w[1].line, w[1].column), (3, 1));
+    assert!(
+        w[1].message.contains("`hid` in `[[rule]]`"),
+        "{}",
+        w[1].message
+    );
+    assert_eq!(w[1].help.as_deref(), Some("did you mean `hide`?"));
+}
+
+#[test]
+fn a_rule_that_changes_nothing_warns() {
+    let w = warning_lines("[[rule]]\napp = \"discord\"\n");
+
+    assert_eq!(w.len(), 1, "{w:#?}");
+    assert_eq!(w[0].0, 1);
+    assert!(w[0].1.contains("changes nothing"), "{}", w[0].1);
+}
+
+#[test]
+fn a_single_bracket_rule_section_is_an_error() {
+    let e = error("[rule]\napp = \"discord\"\nhide = true\n");
+
+    assert!(e.help.unwrap().contains("[[rule]]"));
+}
+
+#[test]
+fn a_bad_rule_rejects_the_config_but_keeps_parsing_the_rest() {
+    let e = errors("[[rule]]\nhide = true\n[[rule]]\napp = \"x\"\nurgency = \"loud\"\n");
+
+    assert_eq!(e.len(), 2, "{e:#?}");
 }
 
 // ── Errors ──
@@ -453,10 +601,39 @@ fn uncommented_template() -> String {
         .join("\n")
 }
 
+/// The template's Rule recipes, as they parse once uncommented.
+fn template_rules() -> Rules {
+    Rules(vec![
+        Rule {
+            app: Some(Pattern::new("spotify")),
+            timeout: Some(RuleTimeout::After(Duration::from_secs(2))),
+            ..Rule::default()
+        },
+        Rule {
+            app: Some(Pattern::new("discord")),
+            summary: Some(Pattern::new("*is typing*")),
+            hide: true,
+            ..Rule::default()
+        },
+        Rule {
+            app: Some(Pattern::new("slack")),
+            urgency: Some(Urgency::Critical),
+            ..Rule::default()
+        },
+    ])
+}
+
 #[test]
 fn the_template_shows_every_option_with_its_default() {
     let text = uncommented_template();
-    assert_eq!(config(&text), Config::default());
+    // The Rules are recipes, not defaults: there are none out of the box.
+    assert_eq!(
+        config(&text),
+        Config {
+            rules: template_rules(),
+            ..Config::default()
+        }
+    );
     for key in [
         "theme",
         "[popup]",
@@ -481,10 +658,44 @@ fn the_template_shows_every_option_with_its_default() {
         "limit",
         "[dnd]",
         "allow_critical",
+        "[[rule]]",
+        "app",
+        "summary",
+        "timeout",
+        "urgency",
+        "hide",
     ] {
         assert!(
             text.lines().any(|l| l.starts_with(key)),
             "the template doesn't show `{key}`"
         );
     }
+}
+
+/// The spec's three example Rules, straight from the template, doing what
+/// the template says they do.
+#[test]
+fn the_template_rule_recipes_behave_as_described() {
+    use crate::engine::testing::*;
+    use crate::engine::{CloseReason, DndChange, Event};
+
+    let mut h = Harness::with_config(config(&uncommented_template()).engine_config());
+
+    // Spotify track changes vanish after 2 seconds.
+    h.notify(notification(1).app("Spotify").summary("Now playing"));
+    assert_eq!(closed(&h.advance(secs(2))), [(1, CloseReason::Expired)]);
+
+    // Discord's "is typing" never pops up, but History still has it.
+    let typing = h.notify(notification(2).app("discord").summary("Ana is typing…"));
+    assert!(shown(&typing).is_empty(), "{typing:?}");
+    assert_eq!(history_count(&typing), Some(2));
+    let message = h.notify(notification(3).app("discord").summary("Ana: lunch?"));
+    assert_eq!(shown(&message), [3]);
+
+    // Slack is Critical, so it gets through Do Not Disturb and stays.
+    h.send(Event::DndSet(DndChange::On));
+    let slack = h.notify(notification(4).app("Slack").summary("Prod is down"));
+    assert_eq!(shown(&slack), [4]);
+    let late = h.advance(secs(3600));
+    assert_eq!(closed(&late), [(3, CloseReason::Expired)], "{late:?}");
 }

@@ -58,9 +58,32 @@
 ## Let Critical Notifications through while Do Not Disturb is on.
 # allow_critical = true
 
-## Per-app Rules, matched in order; the first match wins.
-## `app` and `summary` are case-insensitive and accept `*` wildcards.
+## Per-app Rules tame noisy apps. There are none out of the box: the three
+## below are recipes to copy. Each Rule starts with its own [[rule]] line.
+## A Rule matches on `app` and/or `summary`, case-insensitively, where `*`
+## stands for any text (no regex). Rules are checked in order and the first
+## match wins. A Rule can then set:
+##   timeout = 2           seconds this Popup stays (0 = until dismissed),
+##                         even if the app asked for something else
+##   urgency = "critical"  low, normal or critical
+##   hide = true           no Popup, but it is still recorded in History
+##   history = false       keep it out of History
+## Rules run before Do Not Disturb, so a Rule that makes an app Critical
+## lets it through.
+
+## Spotify's track changes vanish after 2 seconds.
+# [[rule]]
+# app = "spotify"
+# timeout = 2
+
+## Discord's "is typing" never pops up (it still lands in History).
 # [[rule]]
 # app = "discord"
 # summary = "*is typing*"
 # hide = true
+
+## Slack is Critical: it stays until dismissed and gets through Do Not
+## Disturb.
+# [[rule]]
+# app = "slack"
+# urgency = "critical"

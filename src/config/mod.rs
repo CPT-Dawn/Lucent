@@ -31,6 +31,8 @@ pub struct Config {
     pub look: LookConfig,
     pub history: HistoryConfig,
     pub dnd: DndConfig,
+    /// `[[rule]]`: per-app Rules, in file order.
+    pub rules: Rules,
 }
 
 impl Config {
@@ -41,8 +43,7 @@ impl Config {
             timeouts: self.timeouts,
             history: self.history.clone(),
             dnd: self.dnd.clone(),
-            // `[[rule]]` lands with ticket #11 (Per-app Rules).
-            rules: Rules::default(),
+            rules: self.rules.clone(),
         }
     }
 }
