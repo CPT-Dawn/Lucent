@@ -62,14 +62,10 @@ impl Engine {
             notification: notification.clone(),
             received_at: self.clock.now(),
         };
+        // A replacement updates its entry and moves it to the newest place.
         let entries = &mut self.history.entries;
-        match entries
-            .iter_mut()
-            .find(|e| e.notification.id == entry.notification.id)
-        {
-            Some(existing) => *existing = entry,
-            None => entries.push_front(entry),
-        }
+        entries.retain(|e| e.notification.id != entry.notification.id);
+        entries.push_front(entry);
         self.history.entries.truncate(self.config.history.limit);
         self.report_history_count(before, out);
     }
@@ -171,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn a_replaced_notification_keeps_one_entry_in_its_latest_state_and_place() {
+    fn a_replaced_notification_keeps_one_entry_in_its_latest_state_as_the_newest() {
         let mut h = Harness::new();
         h.notify(notification(1).summary("Downloading").progress(10));
         h.notify(notification(2));
@@ -179,8 +175,8 @@ mod tests {
 
         h.notify(notification(1).summary("Downloaded").progress(100));
 
-        assert_eq!(history_ids(&h), [2, 1]);
-        let entry = h.engine.history().nth(1).unwrap();
+        assert_eq!(history_ids(&h), [1, 2]);
+        let entry = h.engine.history().next().unwrap();
         assert_eq!(entry.notification.summary, "Downloaded");
         assert_eq!(entry.notification.hints.progress, Some(100));
         assert_eq!(entry.received_at, h.clock.now());
