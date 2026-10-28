@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::daemon::with_daemon;
 use lucent::engine::Urgency;
+use lucent::text::markup::plain_text;
 
 use crate::dbus::control::HistoryItem;
 
@@ -76,30 +77,6 @@ fn age(seconds: u64) -> String {
         3_600..86_400 => format!("{}h ago", seconds / 3_600),
         _ => format!("{}d ago", seconds / 86_400),
     }
-}
-
-/// A body without its markup: tags dropped, the usual entities decoded.
-fn plain_text(body: &str) -> String {
-    let mut text = String::with_capacity(body.len());
-    let mut in_tag = false;
-    for c in body.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' if in_tag => in_tag = false,
-            c if !in_tag => text.push(c),
-            _ => {}
-        }
-    }
-    [
-        ("&lt;", "<"),
-        ("&gt;", ">"),
-        ("&quot;", "\""),
-        ("&apos;", "'"),
-        ("&#39;", "'"),
-        ("&amp;", "&"),
-    ]
-    .iter()
-    .fold(text, |text, (entity, c)| text.replace(entity, c))
 }
 
 /// `text` on one line, whitespace collapsed, cut to at most `width`

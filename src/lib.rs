@@ -4,3 +4,4 @@
 pub mod config;
 pub mod demo;
 pub mod engine;
+pub mod text;

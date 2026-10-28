@@ -22,7 +22,6 @@ pub mod card;
 pub mod countdown;
 pub mod icon;
 pub mod layout;
-pub mod markup;
 pub mod motion;
 pub mod pill;
 pub mod progress;

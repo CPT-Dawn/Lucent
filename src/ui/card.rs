@@ -27,11 +27,11 @@ use tokio::sync::mpsc::UnboundedSender;
 use super::ago::{ago, until_change};
 use super::countdown::Countdown;
 use super::icon::{self, Art, Source};
-use super::markup::{body_markup, escape};
 use super::progress::{self, Geometry, Ring};
 use super::stack::reduced_motion;
 use super::theme::{Look, Rgba, Theme};
 use super::widgets::{Fit, Tile};
+use lucent::text::markup::{body_markup, escape};
 
 /// Height of the countdown line.
 const LINE_HEIGHT: i32 = 2;

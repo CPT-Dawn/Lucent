@@ -3,10 +3,29 @@
 //! often, so a body is checked before rendering: well-formed markup is
 //! passed on as safe GTK label markup, and anything broken falls back to
 //! the body as escaped plain text, so a message is never lost.
+//!
+//! The CLI reads bodies through the same parser with [`plain_text`], so
+//! `lucent history` shows what the Popup showed.
 
 /// GTK label markup for a Notification body.
 pub fn body_markup(body: &str) -> String {
-    sanitize(body).unwrap_or_else(|| escape(body))
+    render(body, Output::Markup).unwrap_or_else(|| escape(body))
+}
+
+/// A Notification body as plain text: tags dropped, entities decoded,
+/// `<br>` as a newline and `<img>` as its alt text. Broken markup is
+/// returned as sent, which is also what the Popup shows for it.
+pub fn plain_text(body: &str) -> String {
+    render(body, Output::Plain).unwrap_or_else(|| body.to_owned())
+}
+
+/// What [`render`] produces.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Output {
+    /// Safe GTK label markup.
+    Markup,
+    /// Text alone.
+    Plain,
 }
 
 /// Escape text for use inside markup.
@@ -27,7 +46,15 @@ pub fn escape(text: &str) -> String {
 
 /// Rebuild `body` from the tags Lucent understands, or `None` if it is
 /// not well-formed.
-fn sanitize(body: &str) -> Option<String> {
+fn render(body: &str, output: Output) -> Option<String> {
+    let markup = output == Output::Markup;
+    let text = |text: &str| {
+        if markup {
+            escape(text)
+        } else {
+            text.to_owned()
+        }
+    };
     let mut out = String::with_capacity(body.len());
     let mut open: Vec<&'static str> = Vec::new();
     let mut rest = body;
@@ -40,6 +67,9 @@ fn sanitize(body: &str) -> Option<String> {
                 match tag {
                     Tag::Open(name, href) => {
                         open.push(name);
+                        if !markup {
+                            continue;
+                        }
                         match href {
                             Some(href) => {
                                 out.push_str("<a href=\"");
@@ -57,21 +87,24 @@ fn sanitize(body: &str) -> Option<String> {
                         if open.pop()? != name {
                             return None;
                         }
+                        if !markup {
+                            continue;
+                        }
                         out.push_str("</");
                         out.push_str(name);
                         out.push('>');
                     }
                     Tag::LineBreak => out.push('\n'),
-                    Tag::Image(alt) => out.push_str(&escape(&alt)),
+                    Tag::Image(alt) => out.push_str(&text(&alt)),
                 }
             }
             '&' => {
                 let end = rest.find(';')?;
-                out.push_str(&escape(&entity(&rest[1..end])?.to_string()));
+                out.push_str(&text(&entity(&rest[1..end])?.to_string()));
                 rest = &rest[end + 1..];
             }
             c => {
-                out.push_str(&escape(c.encode_utf8(&mut [0; 4])));
+                out.push_str(&text(c.encode_utf8(&mut [0; 4])));
                 rest = &rest[c.len_utf8()..];
             }
         }
@@ -226,6 +259,23 @@ mod tests {
             r#"<a>no href</a>"#,
         ] {
             assert_eq!(body_markup(body), escape(body), "{body}");
+        }
+    }
+
+    #[test]
+    fn plain_text_drops_the_tags_and_decodes_the_entities() {
+        assert_eq!(
+            plain_text(
+                r#"<b>Tom</b> &amp; Jerry<br/>said <a href="x">hi</a> &lt;3 &#9829; <img alt="[pic]"/>"#
+            ),
+            "Tom & Jerry\nsaid hi <3 \u{2665} [pic]"
+        );
+    }
+
+    #[test]
+    fn plain_text_of_broken_markup_is_the_body_as_sent_like_the_popup_shows_it() {
+        for body in ["<b>unclosed", "a < b", "Tom & Jerry", "<blink>hi</blink>"] {
+            assert_eq!(plain_text(body), body);
         }
     }
 
