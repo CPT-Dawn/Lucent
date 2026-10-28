@@ -38,6 +38,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     gtk4::init()?;
 
     let path = file::path().ok_or("can't find the config directory (is $HOME set?)")?;
+    let style_path = file::style_path(&path);
     let (config, live_config) = LiveConfig::load(path);
     tracing::info!(
         "v{} starting (width={}px, max_visible={})",
@@ -45,7 +46,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.popup.width,
         config.popup.max_visible,
     );
-    let stylesheet = ui::style::Stylesheet::new(&config);
+    let stylesheet = Rc::new(ui::style::Stylesheet::new(&config, style_path));
 
     let (events_tx, mut events_rx) = mpsc::unbounded_channel::<Event>();
     let (requests_tx, mut requests_rx) = mpsc::unbounded_channel::<Request>();
@@ -78,17 +79,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let engine = Engine::new(config.engine_config(), Box::new(SystemClock)).with_ids(ids);
     let ui = Rc::new(ui::Ui::new(Rc::new(config), events_tx.clone()));
+    ui.set_theme(stylesheet.theme());
+    {
+        let ui = ui.clone();
+        stylesheet.connect_theme_changed(move |theme| ui.set_theme(theme.clone()));
+    }
     let timers = timers::Timers::new(events_tx.clone());
     let core = Rc::new(Core::new(engine, ui.clone(), timers, signals_tx));
     let main_loop = glib::MainLoop::new(None, false);
 
     let live_config = {
         let ui = ui.clone();
-        live_config.watch(move |config| {
-            stylesheet.apply(config);
-            ui.replace_config(Rc::new(config.clone()));
-            let _ = events_tx.send(Event::ConfigReplaced(config.engine_config()));
-        })
+        let restyle = stylesheet.clone();
+        live_config
+            .on_style_change(move || restyle.reload_user_css())
+            .watch(move |config| {
+                stylesheet.apply(config);
+                ui.replace_config(Rc::new(config.clone()));
+                let _ = events_tx.send(Event::ConfigReplaced(config.engine_config()));
+            })
     };
 
     {

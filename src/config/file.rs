@@ -18,6 +18,15 @@ pub fn path() -> Option<PathBuf> {
     Some(dir()?.join("config.toml"))
 }
 
+/// The name of the optional user stylesheet in [`dir`].
+pub const STYLE_CSS: &str = "style.css";
+
+/// The optional user stylesheet, `style.css` next to the config file,
+/// applied on top of the Theme.
+pub fn style_path(config_path: &Path) -> PathBuf {
+    config_path.with_file_name(STYLE_CSS)
+}
+
 /// Write the commented template to `path` if there is no file there yet.
 /// Returns whether it wrote one.
 pub fn write_template_if_missing(path: &Path) -> io::Result<bool> {

@@ -192,6 +192,11 @@ impl Card {
         &self.root
     }
 
+    /// Repaint the cairo-drawn parts, which read the Theme at draw time.
+    pub fn redraw(&self) {
+        self.shared.line.queue_draw();
+    }
+
     /// Show a replaced Notification in place; its countdown starts over.
     pub fn update(&self, popup: &Popup) {
         *self.shared.notification.borrow_mut() = popup.notification.clone();

@@ -166,7 +166,8 @@ pub enum Horizontal {
 pub struct LookConfig {
     /// A hex colour replacing the Theme's accent; `None` keeps the Theme's.
     pub accent: Option<String>,
-    /// Popup background opacity, from 0.0 to 1.0.
+    /// Scales the Theme's background alpha, from 0.0 (invisible) to 1.0
+    /// (the Theme's own translucency). Text, lines and shadows stay put.
     pub opacity: f64,
     /// Corner radius in pixels.
     pub radius: u32,
@@ -182,7 +183,7 @@ impl Default for LookConfig {
     fn default() -> Self {
         Self {
             accent: None,
-            opacity: 0.9,
+            opacity: 1.0,
             radius: 14,
             font: None,
             icon_size: 40,

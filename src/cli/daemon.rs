@@ -45,7 +45,8 @@ where
     }
 }
 
-fn is_not_running(error: &zbus::Error) -> bool {
+/// Whether `error` means the daemon isn't running.
+pub fn is_not_running(error: &zbus::Error) -> bool {
     matches!(
         error,
         zbus::Error::FDO(e) if matches!(

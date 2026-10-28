@@ -90,14 +90,15 @@ impl Stack {
         Self { inner }
     }
 
-    /// Use new sizes and placement. Cards already on screen take the new
-    /// width; their contents change when next replaced.
+    /// Use new sizes, placement and Theme. Cards already on screen take the
+    /// new width and colours; their contents change when next replaced.
     pub fn set_look(&self, look: &Look, theme: &Theme) {
         *self.inner.look.borrow_mut() = look.clone();
         self.inner.place_window(look, theme);
         self.inner.view.set_child_width(look.width);
         for slot in self.inner.slots.borrow().iter() {
             slot.card.widget().set_size_request(look.width, -1);
+            slot.card.redraw();
         }
         self.inner.relayout();
     }

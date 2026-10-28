@@ -8,7 +8,7 @@ use std::time::{Instant, SystemTime};
 use lucent::engine::{Effect, Engine, Event};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::dbus::control::{Command, HistoryItem};
+use crate::dbus::control::{Command, HistoryItem, StatusItem};
 use crate::{dbus, timers, ui};
 
 /// The engine and the places its effects go. Lives on the GTK main thread.
@@ -16,7 +16,7 @@ pub struct Core {
     engine: RefCell<Engine>,
     ui: Rc<ui::Ui>,
     timers: timers::Timers,
-    /// Effects for the D-Bus thread (signals).
+    /// Effects for the D-Bus thread (signals and status).
     signals: UnboundedSender<Effect>,
 }
 
@@ -87,7 +87,18 @@ impl Core {
             Command::History(reply) => {
                 let _ = reply.send(self.history_items());
             }
+            Command::SetDnd { change, reply } => {
+                self.handle(Event::DndSet(change));
+                let _ = reply.send(self.status());
+            }
+            Command::Status(reply) => {
+                let _ = reply.send(self.status());
+            }
         }
+    }
+
+    fn status(&self) -> StatusItem {
+        self.engine.borrow().status().into()
     }
 
     /// History, newest first, as the CLI sees it.

@@ -1,8 +1,7 @@
 //! Live status: the History count and Do Not Disturb state.
 //!
-//! Whenever either changes, the feature that changed it pushes
-//! `Effect::StatusChanged(self.status())` (History does since ticket #9; Do
-//! Not Disturb lands in ticket #10).
+//! Whenever either changes, the feature that changed it (History or Do Not
+//! Disturb) pushes `Effect::StatusChanged(self.status())`.
 
 use super::{Engine, Status};
 
@@ -11,7 +10,7 @@ impl Engine {
     pub fn status(&self) -> Status {
         Status {
             history_count: self.history.len(),
-            ..Status::default()
+            dnd: self.dnd.is_on(),
         }
     }
 }
