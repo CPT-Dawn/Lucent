@@ -54,7 +54,7 @@ pub use ids::IdAllocator;
 pub use notification::{
     Action, Expiry, Hints, Image, ImageData, Notification, NotificationId, Urgency,
 };
-pub use rules::Rules;
+pub use rules::{Pattern, Rule, RuleTimeout, Rules};
 
 /// Lucent's behaviour. See the [module docs](self).
 pub struct Engine {
