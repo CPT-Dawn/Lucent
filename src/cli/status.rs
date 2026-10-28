@@ -46,7 +46,7 @@ async fn follow(lucent: ControlProxy<'static>) -> zbus::Result<ExitCode> {
             Some(signal) = changes.next() => match signal.args() {
                 Ok(args) => args.status,
                 Err(e) => {
-                    eprintln!("lucent: ignoring a malformed status signal: {e}");
+                    tracing::warn!("ignoring a malformed status signal: {e}");
                     continue;
                 }
             },

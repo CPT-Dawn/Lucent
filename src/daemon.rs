@@ -32,7 +32,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })?;
     if let Some(owner) = owner {
         // Not an error: someone is showing Notifications, just not us.
-        eprintln!("{}", dbus::owner::standing_aside(&owner).trim_end());
+        let message = dbus::owner::standing_aside(&owner);
+        if owner.is_lucent() {
+            tracing::info!("{}", message.trim_end());
+        } else {
+            tracing::warn!("{}", message.trim_end());
+        }
         return Ok(());
     }
 
