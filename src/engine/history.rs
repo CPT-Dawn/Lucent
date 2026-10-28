@@ -6,8 +6,17 @@
 use super::{Effect, Engine, Notification, NotificationId};
 
 /// History settings (`[history]` in the config).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct HistoryConfig {}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryConfig {
+    /// At most this many entries are kept; the oldest drop first.
+    pub limit: usize,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self { limit: 100 }
+    }
+}
 
 /// History state.
 #[derive(Debug, Default)]

@@ -2,6 +2,7 @@
 //! own thread, turns calls into engine [`Event`]s and emits the signals the
 //! engine asks for.
 
+pub mod control;
 mod hints;
 
 use std::collections::HashMap;
@@ -114,22 +115,25 @@ pub fn handles(effect: &Effect) -> bool {
     )
 }
 
-/// Claim the notification name, serve the interface and emit the signal
+/// Claim the notification and control names, serve both interfaces and emit the signal
 /// effects that arrive on `effects` until the channel closes.
 pub async fn run_server(
     events: UnboundedSender<Event>,
     ids: IdAllocator,
+    requests: UnboundedSender<control::Request>,
     mut effects: UnboundedReceiver<Effect>,
 ) -> zbus::Result<()> {
     let conn = zbus::connection::Builder::session()
         .serve_at(NOTIFICATIONS_PATH, NotificationServer { events, ids })
+        .serve_at(control::CONTROL_PATH, control::ControlServer { requests })
         .name(NOTIFICATIONS_NAME)
+        .name(control::CONTROL_NAME)
         // Never steal the name from another daemon, nor let one steal ours.
         .replace_existing_names(false)
         .allow_name_replacements(false)
         .build()
         .await?;
-    tracing::info!("claimed {NOTIFICATIONS_NAME}");
+    tracing::info!("claimed {NOTIFICATIONS_NAME} and {}", control::CONTROL_NAME);
 
     let iface = conn
         .object_server()

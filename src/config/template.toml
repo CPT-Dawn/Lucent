@@ -1,0 +1,61 @@
+# Lucent configuration
+#
+# Every option below is optional and shown with its default value,
+# commented out. To change one, remove the `# ` in front of it (and in
+# front of its [section] line) and edit the value. Lucent applies your
+# changes as soon as you save; run `lucent check` to validate this file.
+#
+# Delete this file to get a fresh copy on the next start.
+
+## Look and feel: "auto" uses Dawn in dark mode and Daybreak in light mode.
+## Themes: auto, dawn, daybreak, graphite.
+# theme = "auto"
+
+# [popup]
+## Where Popups appear: top or bottom, then left, center or right.
+# position = "top-right"
+## Popup width in pixels.
+# width = 380
+## At most this many Popups at once; the rest wait behind a "+N more" pill.
+# max_visible = 5
+## Pixels between Popups, and between the stack and the screen edges.
+# gap = 10
+# margin = 16
+## Monitor to show Popups on: "" means the focused one, or e.g. "DP-1".
+# output = ""
+
+# [timeout]
+## Seconds a Popup stays, by Urgency; 0 means it stays until dismissed.
+## An app that sets its own timeout always wins.
+# low = 3
+# normal = 5
+# critical = 0
+
+# [look]
+## Accent colour as hex, e.g. "#ff8a3d"; "" keeps the Theme's own.
+# accent = ""
+## Background opacity, from 0.0 (invisible) to 1.0 (solid).
+# opacity = 0.9
+## Corner radius in pixels.
+# radius = 14
+## Font family; "" uses your system UI font.
+# font = ""
+## Size of the app icon or image in pixels.
+# icon_size = 40
+## Show the line along the bottom of each Popup that counts down its time.
+# countdown = true
+
+# [history]
+## How many Notifications History remembers (in memory only).
+# limit = 100
+
+# [dnd]
+## Let Critical Notifications through while Do Not Disturb is on.
+# allow_critical = true
+
+## Per-app Rules, matched in order; the first match wins.
+## `app` and `summary` are case-insensitive and accept `*` wildcards.
+# [[rule]]
+# app = "discord"
+# summary = "*is typing*"
+# hide = true

@@ -61,7 +61,7 @@ sudo install -Dm644 org.freedesktop.Notifications.service \
 Configuration is loaded from XDG config location:
 
 - Primary path: `~/.config/lucent/config.toml`
-- Source of defaults: embedded `default_config.toml` written automatically on first run
+- On first run Lucent writes a fully commented config there, every option shown but commented out (`src/config/template.toml`)
 
 Reference configuration:
 
