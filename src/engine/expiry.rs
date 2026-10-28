@@ -1,14 +1,27 @@
-//! Timeouts: how long each Popup stays, its expiry timer and (later) hover
+//! Timeouts: how long each Popup stays, its expiry timer and the hover
 //! pause.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use super::{CloseReason, Effect, Engine, Expiry, Notification, NotificationId, Popup, Timer};
 
-/// When each visible Popup is due to expire.
+/// The countdown of each visible Popup that expires, and which Popups are
+/// under the pointer.
 #[derive(Debug, Default)]
-pub(super) struct Deadlines(HashMap<NotificationId, Instant>);
+pub(super) struct Deadlines {
+    countdowns: HashMap<NotificationId, Countdown>,
+    hovered: HashSet<NotificationId>,
+}
+
+/// Where a Popup's countdown stands.
+#[derive(Debug, Clone, Copy)]
+enum Countdown {
+    /// Expires at this instant; its expiry timer is pending.
+    Running(Instant),
+    /// Hovered: this much time is left and no timer is pending.
+    Paused(Duration),
+}
 
 impl Engine {
     /// How long a Popup for this Notification stays; `None` means never.
@@ -21,23 +34,39 @@ impl Engine {
         }
     }
 
-    /// (Re)start a Popup's countdown from its full timeout.
+    /// (Re)start a Popup's countdown from its full timeout. A Popup under
+    /// the pointer starts paused.
     pub(super) fn start_expiry(&mut self, popup: &Popup, out: &mut Vec<Effect>) {
-        match popup.timeout {
-            Some(after) => {
-                self.expiry.0.insert(popup.id(), self.clock.now() + after);
-                out.push(Effect::ScheduleTimer {
-                    timer: Timer::Expire(popup.id()),
-                    after,
-                });
-            }
-            None => self.stop_expiry(popup.id(), out),
+        let id = popup.id();
+        self.cancel_countdown(id, out);
+        let Some(after) = popup.timeout else {
+            return;
+        };
+        if self.expiry.hovered.contains(&id) {
+            self.expiry.countdowns.insert(id, Countdown::Paused(after));
+            out.push(Effect::CountdownPaused {
+                id,
+                remaining: after,
+            });
+            return;
         }
+        self.expiry
+            .countdowns
+            .insert(id, Countdown::Running(self.clock.now() + after));
+        out.push(Effect::ScheduleTimer {
+            timer: Timer::Expire(id),
+            after,
+        });
     }
 
-    /// Forget a Popup's countdown.
+    /// Forget a Popup's countdown and hover; it has left the screen.
     pub(super) fn stop_expiry(&mut self, id: NotificationId, out: &mut Vec<Effect>) {
-        if self.expiry.0.remove(&id).is_some() {
+        self.expiry.hovered.remove(&id);
+        self.cancel_countdown(id, out);
+    }
+
+    fn cancel_countdown(&mut self, id: NotificationId, out: &mut Vec<Effect>) {
+        if let Some(Countdown::Running(_)) = self.expiry.countdowns.remove(&id) {
             out.push(Effect::CancelTimer(Timer::Expire(id)));
         }
     }
@@ -45,12 +74,12 @@ impl Engine {
     pub(super) fn timer_fired(&mut self, timer: Timer, out: &mut Vec<Effect>) {
         match timer {
             Timer::Expire(id) => {
-                let Some(&deadline) = self.expiry.0.get(&id) else {
+                let Some(&Countdown::Running(deadline)) = self.expiry.countdowns.get(&id) else {
                     return;
                 };
                 let now = self.clock.now();
                 if now >= deadline {
-                    self.expiry.0.remove(&id);
+                    self.expiry.countdowns.remove(&id);
                     self.close(id, CloseReason::Expired, out);
                 } else {
                     out.push(Effect::ScheduleTimer {
@@ -62,11 +91,38 @@ impl Engine {
         }
     }
 
-    /// Not handled yet: ticket #4 pauses the countdown while hovered.
-    pub(super) fn hover_started(&mut self, _id: NotificationId, _out: &mut Vec<Effect>) {}
+    /// The pointer entered a Popup: freeze its countdown.
+    pub(super) fn hover_started(&mut self, id: NotificationId, out: &mut Vec<Effect>) {
+        if !self.stack.is_visible(id) {
+            return;
+        }
+        self.expiry.hovered.insert(id);
+        let now = self.clock.now();
+        if let Some(countdown) = self.expiry.countdowns.get_mut(&id)
+            && let Countdown::Running(deadline) = *countdown
+        {
+            let remaining = deadline.saturating_duration_since(now);
+            *countdown = Countdown::Paused(remaining);
+            out.push(Effect::CancelTimer(Timer::Expire(id)));
+            out.push(Effect::CountdownPaused { id, remaining });
+        }
+    }
 
-    /// Not handled yet: ticket #4 resumes the countdown.
-    pub(super) fn hover_ended(&mut self, _id: NotificationId, _out: &mut Vec<Effect>) {}
+    /// The pointer left a Popup: carry on from the time that was left.
+    pub(super) fn hover_ended(&mut self, id: NotificationId, out: &mut Vec<Effect>) {
+        self.expiry.hovered.remove(&id);
+        let now = self.clock.now();
+        if let Some(countdown) = self.expiry.countdowns.get_mut(&id)
+            && let Countdown::Paused(remaining) = *countdown
+        {
+            *countdown = Countdown::Running(now + remaining);
+            out.push(Effect::ScheduleTimer {
+                timer: Timer::Expire(id),
+                after: remaining,
+            });
+            out.push(Effect::CountdownResumed { id, remaining });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -169,6 +225,97 @@ mod tests {
             after: secs(3),
         }));
         assert_eq!(closed(&h.advance(secs(3))), expired(1));
+    }
+
+    #[test]
+    fn hovering_pauses_the_countdown_and_leaving_resumes_the_remaining_time() {
+        let mut h = Harness::new();
+        h.notify(notification(1));
+        h.advance(secs(2));
+
+        h.send(Event::HoverStarted(1));
+        let while_hovered = h.advance(secs(60));
+        h.send(Event::HoverEnded(1));
+        let before = h.advance(millis(2_999));
+        let on_time = h.advance(millis(1));
+
+        assert!(while_hovered.is_empty(), "{while_hovered:?}");
+        assert!(before.is_empty(), "{before:?}");
+        assert_eq!(closed(&on_time), expired(1));
+    }
+
+    #[test]
+    fn the_countdown_line_learns_when_it_is_paused_and_resumed() {
+        let mut h = Harness::new();
+        h.notify(notification(1));
+        h.advance(millis(1_500));
+
+        let paused = h.send(Event::HoverStarted(1));
+        h.advance(secs(10));
+        let resumed = h.send(Event::HoverEnded(1));
+
+        assert!(paused.contains(&Effect::CountdownPaused {
+            id: 1,
+            remaining: millis(3_500),
+        }));
+        assert!(resumed.contains(&Effect::CountdownResumed {
+            id: 1,
+            remaining: millis(3_500),
+        }));
+    }
+
+    #[test]
+    fn a_replacement_while_hovered_stays_paused_with_its_full_timeout() {
+        let mut h = Harness::new();
+        h.notify(notification(1));
+        h.advance(secs(4));
+        h.send(Event::HoverStarted(1));
+
+        let replaced = h.notify(notification(1).summary("again"));
+        let while_hovered = h.advance(secs(60));
+        h.send(Event::HoverEnded(1));
+
+        assert!(replaced.contains(&Effect::CountdownPaused {
+            id: 1,
+            remaining: secs(5),
+        }));
+        assert!(while_hovered.is_empty(), "{while_hovered:?}");
+        assert!(h.advance(millis(4_999)).is_empty());
+        assert_eq!(closed(&h.advance(millis(1))), expired(1));
+    }
+
+    #[test]
+    fn hovering_a_popup_that_never_expires_changes_nothing() {
+        let mut h = Harness::new();
+        h.notify(notification(1).urgency(Urgency::Critical));
+
+        assert!(h.send(Event::HoverStarted(1)).is_empty());
+        assert!(h.send(Event::HoverEnded(1)).is_empty());
+        assert!(h.advance(secs(3_600)).is_empty());
+    }
+
+    #[test]
+    fn hover_events_for_unknown_or_closed_popups_do_nothing() {
+        let mut h = Harness::new();
+        h.notify(notification(1));
+        h.send(Event::UserDismissed(1));
+
+        assert!(h.send(Event::HoverStarted(1)).is_empty());
+        assert!(h.send(Event::HoverEnded(1)).is_empty());
+        assert!(h.send(Event::HoverStarted(42)).is_empty());
+        assert!(h.send(Event::HoverEnded(42)).is_empty());
+    }
+
+    #[test]
+    fn a_popup_that_reuses_a_closed_hovered_id_counts_down_normally() {
+        let mut h = Harness::new();
+        h.notify(notification(1));
+        h.send(Event::HoverStarted(1));
+        h.send(Event::UserDismissed(1));
+
+        h.notify(notification(1));
+
+        assert_eq!(closed(&h.advance(secs(5))), expired(1));
     }
 
     #[test]

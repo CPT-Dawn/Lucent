@@ -32,6 +32,16 @@ pub enum Effect {
     ScheduleTimer { timer: Timer, after: Duration },
     /// Forget a pending timer, if any.
     CancelTimer(Timer),
+    /// A Popup's countdown froze (it is hovered) with this much time left.
+    CountdownPaused {
+        id: NotificationId,
+        remaining: Duration,
+    },
+    /// A Popup's countdown carries on with this much time left.
+    CountdownResumed {
+        id: NotificationId,
+        remaining: Duration,
+    },
     /// The History count or Do Not Disturb state changed.
     StatusChanged(Status),
 }
