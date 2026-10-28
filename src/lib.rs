@@ -2,4 +2,5 @@
 //! D-Bus and GTK adapters.
 
 pub mod config;
+pub mod demo;
 pub mod engine;

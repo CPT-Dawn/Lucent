@@ -15,7 +15,7 @@ categories = ["gui", "system-tools"]
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service", "tracing"] }
 
 # Async runtime for the D-Bus thread; its channels also wake the GLib loop
-tokio = { version = "1.54", features = ["rt", "sync", "macros"] }
+tokio = { version = "1.54", features = ["rt", "sync", "macros", "time"] }
 
 # Streams of D-Bus signals for `lucent status --follow`
 futures-util = { version = "0.3", default-features = false }

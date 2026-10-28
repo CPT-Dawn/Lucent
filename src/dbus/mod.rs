@@ -3,7 +3,7 @@
 //! engine asks for.
 
 pub mod control;
-mod hints;
+pub mod hints;
 
 use std::collections::HashMap;
 

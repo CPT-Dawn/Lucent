@@ -9,6 +9,7 @@
 mod check;
 mod clear;
 mod daemon;
+mod demo;
 mod dismiss;
 mod dnd;
 mod history;
@@ -34,6 +35,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Show off every kind of Popup in a short, playful demo.
+    ///
+    /// Sends a plain Popup, one with Actions, one with album art, a live
+    /// progress ring, a low one and a Critical one, to the running Lucent.
+    Demo,
     /// Validate the config and print its warnings and errors.
     ///
     /// Exits non-zero if the config has errors.
@@ -100,6 +106,7 @@ pub enum DndChange {
 impl Command {
     pub fn run(self) -> ExitCode {
         match self {
+            Self::Demo => demo::run(),
             Self::Check { path } => check::run(path),
             Self::Reload => reload::run(),
             Self::Dismiss { all } => dismiss::run(all),
