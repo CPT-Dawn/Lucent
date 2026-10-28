@@ -5,7 +5,9 @@ One tag push publishes everything. `.github/workflows/release.yml` then:
 1. builds the x86_64 binary in an Arch container;
 2. creates the GitHub Release with two assets: `lucent-X.Y.Z.tar.gz` (source)
    and `lucent-X.Y.Z-x86_64.tar.gz` (binary, D-Bus activation file, licence,
-   README), plus `SHA256SUMS`;
+   README), plus `SHA256SUMS`. The release body is
+   `docs/release-notes/vX.Y.Z.md` from the tagged commit; if that file
+   doesn't exist, GitHub generates the notes from merged PRs;
 3. pushes PKGBUILD and .SRCINFO to the AUR for **`lucent`** (built from the
    source asset, x86_64 and aarch64) and **`lucent-bin`** (the prebuilt
    x86_64 asset).
@@ -15,9 +17,15 @@ One tag push publishes everything. `.github/workflows/release.yml` then:
 1. Set `version` in `Cargo.toml` to the new version, run `cargo build` so
    `Cargo.lock` follows, and commit. The workflow refuses a tag that doesn't
    match `Cargo.toml`.
-2. Tag and push: `git tag -s v2.0.0 -m "Lucent 2.0.0" && git push origin v2.0.0`.
-3. Edit the generated release notes on GitHub if needed (for example, the
-   "upgrading from v1" section).
+2. Write the release notes in `docs/release-notes/vX.Y.Z.md` (Markdown, no
+   top-level title: the release is titled "Lucent vX.Y.Z") and commit them.
+   Images should use absolute `raw.githubusercontent.com/.../vX.Y.Z/...`
+   URLs, because relative paths don't resolve in a release body.
+3. Tag and push: `git tag -s v2.0.0 -m "Lucent 2.0.0" && git push origin v2.0.0`.
+
+Re-running the workflow for an existing release replaces its assets and, if
+the notes file exists, its body too. To fix only the notes later:
+`gh release edit vX.Y.Z --notes-file docs/release-notes/vX.Y.Z.md`.
 
 To retry a failed release, run the workflow by hand with the same tag and
 "dry run" unticked. It reuses the existing release and replaces its assets.

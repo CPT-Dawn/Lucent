@@ -121,6 +121,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only for the hand-written release notes, docs/release-notes/<tag>.md.
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || format('refs/tags/{0}', inputs.tag) }}
+          sparse-checkout: docs/release-notes
+
       - uses: actions/download-artifact@v4
         with:
           name: dist
@@ -131,10 +138,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # Hand-written notes win; without them GitHub generates a changelog.
+          notes_file="docs/release-notes/$TAG.md"
+          if [[ -f "$notes_file" ]]; then
+            notes=(--notes-file "$notes_file")
+          else
+            echo "::notice::No $notes_file, so GitHub generates the notes"
+            notes=(--generate-notes)
+          fi
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
+            if [[ -f "$notes_file" ]]; then
+              gh release edit "$TAG" --notes-file "$notes_file"
+            fi
           else
-            gh release create "$TAG" dist/* --verify-tag --title "Lucent $TAG" --generate-notes
+            gh release create "$TAG" dist/* --verify-tag --title "Lucent $TAG" "${notes[@]}"
           fi
 
   aur:
