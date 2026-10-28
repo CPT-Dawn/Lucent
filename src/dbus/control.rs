@@ -12,10 +12,11 @@
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use lucent::engine::{HistoryEntry, NotificationId, Urgency};
+use lucent::engine::{DndChange, HistoryEntry, NotificationId, Status, Urgency};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
+use zbus::object_server::SignalEmitter;
 use zbus::zvariant::Type;
 use zbus::{fdo, interface, proxy};
 
@@ -52,6 +53,30 @@ pub enum Command {
     ClearHistory(Reply<u32>),
     /// List History, newest first.
     History(Reply<Vec<HistoryItem>>),
+    /// Switch Do Not Disturb. Answers with the status afterwards.
+    SetDnd {
+        change: DndChange,
+        reply: Reply<StatusItem>,
+    },
+    /// The current status.
+    Status(Reply<StatusItem>),
+}
+
+/// The live status as the CLI sees it: the History count and whether Do
+/// Not Disturb is on. Sent by `Status`, `SetDnd` and `StatusChanged`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+pub struct StatusItem {
+    pub history_count: u32,
+    pub dnd: bool,
+}
+
+impl From<Status> for StatusItem {
+    fn from(status: Status) -> Self {
+        Self {
+            history_count: u32::try_from(status.history_count).unwrap_or(u32::MAX),
+            dnd: status.dnd,
+        }
+    }
 }
 
 /// A History entry as the CLI sees it, on the bus and in `--json`.
@@ -152,6 +177,36 @@ impl ControlServer {
         self.ask(|reply| Request::Engine(Command::History(reply)))
             .await
     }
+
+    /// Switch Do Not Disturb: `change` is `on`, `off` or `toggle`. Returns
+    /// the status afterwards.
+    async fn set_dnd(&self, change: &str) -> fdo::Result<StatusItem> {
+        let change = match change {
+            "on" => DndChange::On,
+            "off" => DndChange::Off,
+            "toggle" => DndChange::Toggle,
+            other => {
+                return Err(fdo::Error::InvalidArgs(format!(
+                    "expected on, off or toggle, not {other:?}"
+                )));
+            }
+        };
+        self.ask(|reply| Request::Engine(Command::SetDnd { change, reply }))
+            .await
+    }
+
+    /// The History count and Do Not Disturb state.
+    async fn status(&self) -> fdo::Result<StatusItem> {
+        self.ask(|reply| Request::Engine(Command::Status(reply)))
+            .await
+    }
+
+    /// Emitted whenever the History count or Do Not Disturb state changes.
+    #[zbus(signal)]
+    pub async fn status_changed(
+        emitter: &SignalEmitter<'_>,
+        status: StatusItem,
+    ) -> zbus::Result<()>;
 }
 
 /// The CLI's handle on a running daemon. Calls never start the daemon.
@@ -175,6 +230,15 @@ pub trait Control {
 
     #[zbus(no_autostart)]
     fn history(&self) -> zbus::Result<Vec<HistoryItem>>;
+
+    #[zbus(no_autostart)]
+    fn set_dnd(&self, change: &str) -> zbus::Result<StatusItem>;
+
+    #[zbus(no_autostart)]
+    fn status(&self) -> zbus::Result<StatusItem>;
+
+    #[zbus(signal)]
+    fn status_changed(&self, status: StatusItem) -> zbus::Result<()>;
 }
 
 impl Default for HistoryItem {

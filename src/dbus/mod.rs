@@ -121,7 +121,7 @@ impl NotificationServer {
 pub fn handles(effect: &Effect) -> bool {
     matches!(
         effect,
-        Effect::NotificationClosed { .. } | Effect::ActionInvoked { .. }
+        Effect::NotificationClosed { .. } | Effect::ActionInvoked { .. } | Effect::StatusChanged(_)
     )
 }
 
@@ -149,6 +149,10 @@ pub async fn run_server(
         .object_server()
         .interface::<_, NotificationServer>(NOTIFICATIONS_PATH)
         .await?;
+    let control = conn
+        .object_server()
+        .interface::<_, control::ControlServer>(control::CONTROL_PATH)
+        .await?;
 
     while let Some(effect) = effects.recv().await {
         let emitter = iface.signal_emitter();
@@ -158,6 +162,10 @@ pub async fn run_server(
             }
             Effect::ActionInvoked { id, key } => {
                 NotificationServer::action_invoked(emitter, id, &key).await
+            }
+            Effect::StatusChanged(status) => {
+                control::ControlServer::status_changed(control.signal_emitter(), status.into())
+                    .await
             }
             _ => Ok(()),
         };
