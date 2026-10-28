@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use super::{Effect, Engine, Notification, NotificationId, Popup};
+use super::{CloseReason, Effect, Engine, Notification, NotificationId, Popup};
 
 /// Visible Popups (oldest first) and Overflow (first in, first out).
 #[derive(Debug, Default)]
@@ -110,11 +110,17 @@ impl Engine {
         }
     }
 
-    /// The "+N more" pill was clicked.
-    ///
-    /// Not handled yet: ticket #8 (Stack placement and the Overflow pill)
-    /// dismisses the oldest visible Popup so the next one comes in.
-    pub(super) fn advance_overflow(&mut self, _out: &mut Vec<Effect>) {}
+    /// The "+N more" pill was clicked: dismiss the oldest visible Popup so
+    /// the next one in Overflow comes in. A click that arrives after
+    /// Overflow emptied (the pill was on its way out) does nothing.
+    pub(super) fn advance_overflow(&mut self, out: &mut Vec<Effect>) {
+        if self.stack.overflow_len() == 0 {
+            return;
+        }
+        if let Some(oldest) = self.stack.visible.first().map(Popup::id) {
+            self.close(oldest, CloseReason::Dismissed, out);
+        }
+    }
 
     fn show(&mut self, notification: Notification, out: &mut Vec<Effect>) {
         let popup = self.popup_for(notification);
@@ -219,6 +225,79 @@ mod tests {
         assert_eq!(shown(&at_5s), [2]);
         assert!(at_9s.is_empty(), "{at_9s:?}");
         assert_eq!(closed(&at_10s), [(2, CloseReason::Expired)]);
+    }
+
+    #[test]
+    fn a_burst_beyond_max_visible_waits_behind_the_pill() {
+        let mut h = Harness::new();
+        let mut counts = Vec::new();
+        let mut shown_ids = Vec::new();
+        for id in 1..=8 {
+            let effects = h.notify(notification(id));
+            shown_ids.extend(shown(&effects));
+            counts.extend(overflow_count(&effects));
+        }
+
+        assert_eq!(shown_ids, [1, 2, 3, 4, 5]);
+        assert_eq!(counts, [1, 2, 3], "+3 more");
+    }
+
+    #[test]
+    fn clicking_the_pill_dismisses_the_oldest_popup_and_shows_the_next() {
+        let mut h = two_visible();
+        for id in 1..=4 {
+            h.notify(notification(id));
+        }
+
+        let first = h.send(Event::OverflowAdvanced);
+        let second = h.send(Event::OverflowAdvanced);
+
+        assert_eq!(removed(&first), [(1, CloseReason::Dismissed)]);
+        assert_eq!(closed(&first), [(1, CloseReason::Dismissed)]);
+        assert_eq!(shown(&first), [3]);
+        assert_eq!(overflow_count(&first), Some(1));
+        assert_eq!(removed(&second), [(2, CloseReason::Dismissed)]);
+        assert_eq!(shown(&second), [4]);
+        assert_eq!(overflow_count(&second), Some(0));
+    }
+
+    #[test]
+    fn the_pill_advances_past_popups_closed_out_of_order() {
+        let mut h = two_visible();
+        for id in 1..=4 {
+            h.notify(notification(id));
+        }
+        h.send(Event::UserDismissed(1));
+
+        let effects = h.send(Event::OverflowAdvanced);
+
+        assert_eq!(removed(&effects), [(2, CloseReason::Dismissed)]);
+        assert_eq!(shown(&effects), [4]);
+    }
+
+    #[test]
+    fn a_stale_pill_click_with_nothing_waiting_closes_nothing() {
+        let mut h = two_visible();
+        h.notify(notification(1));
+        h.notify(notification(2));
+
+        assert!(h.send(Event::OverflowAdvanced).is_empty());
+    }
+
+    #[test]
+    fn raising_max_visible_brings_waiting_notifications_on_screen() {
+        let mut h = two_visible();
+        for id in 1..=5 {
+            h.notify(notification(id));
+        }
+
+        let effects = h.send(Event::ConfigReplaced(EngineConfig {
+            max_visible: 4,
+            ..Default::default()
+        }));
+
+        assert_eq!(shown(&effects), [3, 4]);
+        assert_eq!(overflow_count(&effects), Some(1));
     }
 
     #[test]

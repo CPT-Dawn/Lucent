@@ -111,6 +111,7 @@ impl Engine {
 
     fn replace_config(&mut self, config: EngineConfig, out: &mut Vec<Effect>) {
         self.config = config;
+        self.fill_from_overflow(out);
         self.apply_history_limit(out);
     }
 }

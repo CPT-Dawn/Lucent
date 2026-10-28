@@ -41,6 +41,22 @@ pub fn offsets(heights: &[i32], gap: i32) -> Vec<i32> {
         .collect()
 }
 
+/// The Overflow pill's distance from the anchored edge: one gap past the
+/// oldest card (heights newest first).
+pub fn pill_offset(heights: &[i32], gap: i32) -> i32 {
+    heights.iter().map(|height| height + gap).sum()
+}
+
+/// Which of the outputs (by connector name, e.g. `DP-1`) the stack is
+/// pinned to. `None` lets the compositor choose, which is the focused
+/// output: when no output is named, or the named one isn't connected.
+pub fn pick_output(wanted: Option<&str>, connectors: &[Option<String>]) -> Option<usize> {
+    let wanted = wanted?;
+    connectors
+        .iter()
+        .position(|connector| connector.as_deref() == Some(wanted))
+}
+
 /// Room around the cards inside the window: the shadow's reach, except
 /// that towards an anchored screen edge there is no point reaching past
 /// the screen, so the padding there is at most the margin.
@@ -83,6 +99,21 @@ mod tests {
     fn the_newest_popup_sits_at_the_edge_and_older_ones_follow() {
         assert_eq!(offsets(&[80, 120, 60], 10), [0, 90, 220]);
         assert!(offsets(&[], 10).is_empty());
+    }
+
+    #[test]
+    fn the_pill_follows_the_oldest_popup_one_gap_further_from_the_edge() {
+        assert_eq!(pill_offset(&[80, 120, 60], 10), 290);
+        assert_eq!(pill_offset(&[], 10), 0);
+    }
+
+    #[test]
+    fn a_named_output_pins_the_stack_and_no_name_follows_focus() {
+        let outputs = [Some("eDP-1".to_string()), None, Some("DP-1".to_string())];
+
+        assert_eq!(pick_output(Some("DP-1"), &outputs), Some(2));
+        assert_eq!(pick_output(Some("HDMI-A-1"), &outputs), None);
+        assert_eq!(pick_output(None, &outputs), None);
     }
 
     #[test]
