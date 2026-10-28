@@ -11,7 +11,7 @@ use gtk4::glib;
 use lucent::engine::{Effect, Event, NotificationId, Popup};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::config::Config;
+use crate::live_config::Config;
 use window::NotificationWindow;
 
 /// Vertical gap between stacked Popups.

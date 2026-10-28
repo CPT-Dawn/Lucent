@@ -7,7 +7,7 @@
 use gtk4::CssProvider;
 use gtk4::gdk::Display;
 
-use crate::config::Config;
+use crate::live_config::Config;
 
 /// Build the CSS stylesheet from user configuration values.
 fn build_css(config: &Config) -> String {

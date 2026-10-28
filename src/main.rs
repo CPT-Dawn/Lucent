@@ -9,8 +9,8 @@
 //!   and hands its effects to the GTK adapter ([`ui`]), the timer adapter
 //!   ([`timers`]) and back to the D-Bus thread for signals.
 
-mod config;
 mod dbus;
+mod live_config;
 mod timers;
 mod ui;
 
@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     gtk4::init()?;
 
-    let config = Rc::new(config::load_or_create_config()?);
+    let config = Rc::new(live_config::load_or_create_config()?);
     tracing::info!(
         "v{} starting (width={}px, timeout={}s, max={})",
         env!("CARGO_PKG_VERSION"),

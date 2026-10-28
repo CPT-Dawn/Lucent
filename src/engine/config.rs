@@ -71,3 +71,87 @@ impl Default for Timeouts {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{EngineConfig, Timeouts};
+    use crate::engine::testing::*;
+    use crate::engine::{CloseReason, Event, Urgency};
+
+    fn timeouts(low: u64, normal: u64, critical: Option<u64>) -> Timeouts {
+        Timeouts {
+            low: Some(secs(low)),
+            normal: Some(secs(normal)),
+            critical: critical.map(Duration::from_secs),
+        }
+    }
+
+    fn expired(id: u32) -> Vec<(u32, CloseReason)> {
+        vec![(id, CloseReason::Expired)]
+    }
+
+    #[test]
+    fn configured_urgency_timeouts_replace_the_defaults() {
+        let mut h = Harness::with_config(EngineConfig {
+            timeouts: timeouts(1, 2, Some(4)),
+            ..EngineConfig::default()
+        });
+        h.notify(notification(1).urgency(Urgency::Low));
+        h.notify(notification(2));
+        h.notify(notification(3).urgency(Urgency::Critical));
+
+        assert_eq!(closed(&h.advance(secs(1))), expired(1));
+        assert_eq!(closed(&h.advance(secs(1))), expired(2));
+        assert_eq!(closed(&h.advance(secs(2))), expired(3));
+    }
+
+    #[test]
+    fn the_apps_own_expiry_still_wins_over_configured_timeouts() {
+        let mut h = Harness::with_config(EngineConfig {
+            timeouts: timeouts(1, 1, None),
+            ..EngineConfig::default()
+        });
+        h.notify(notification(1).expires_after(secs(10)));
+        h.notify(
+            notification(2)
+                .urgency(Urgency::Critical)
+                .expires_after(secs(3)),
+        );
+
+        assert!(h.advance(secs(1)).is_empty());
+        assert_eq!(closed(&h.advance(secs(2))), expired(2));
+        assert_eq!(closed(&h.advance(secs(7))), expired(1));
+    }
+
+    #[test]
+    fn a_replaced_config_applies_to_notifications_received_afterwards() {
+        let mut h = Harness::new();
+        h.notify(notification(1));
+
+        h.send(Event::ConfigReplaced(EngineConfig {
+            timeouts: timeouts(1, 1, Some(1)),
+            ..EngineConfig::default()
+        }));
+        h.notify(notification(2));
+
+        assert_eq!(closed(&h.advance(secs(1))), expired(2));
+        assert_eq!(closed(&h.advance(secs(4))), expired(1));
+    }
+
+    #[test]
+    fn a_replaced_config_can_shrink_the_visible_stack_for_new_popups() {
+        let mut h = Harness::new();
+        h.send(Event::ConfigReplaced(EngineConfig {
+            max_visible: 1,
+            ..EngineConfig::default()
+        }));
+
+        h.notify(notification(1));
+        let effects = h.notify(notification(2));
+
+        assert!(shown(&effects).is_empty(), "{effects:?}");
+        assert_eq!(overflow_count(&effects), Some(1));
+    }
+}

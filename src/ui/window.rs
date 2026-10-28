@@ -16,7 +16,7 @@ use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use lucent::engine::{Event, NotificationId, Popup};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::config::Config;
+use crate::live_config::Config;
 
 /// Margin from screen edges in pixels.
 const SCREEN_MARGIN: i32 = 12;

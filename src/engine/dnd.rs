@@ -6,8 +6,19 @@
 use super::{DndChange, Effect, Engine, Notification};
 
 /// Do Not Disturb settings (`[dnd]` in the config).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct DndConfig {}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DndConfig {
+    /// Critical Notifications still show a Popup while Do Not Disturb is on.
+    pub allow_critical: bool,
+}
+
+impl Default for DndConfig {
+    fn default() -> Self {
+        Self {
+            allow_critical: true,
+        }
+    }
+}
 
 /// Do Not Disturb state. Always starts off.
 #[derive(Debug, Default)]
