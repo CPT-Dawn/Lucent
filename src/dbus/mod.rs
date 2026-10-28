@@ -26,14 +26,15 @@ struct NotificationServer {
 
 #[interface(name = "org.freedesktop.Notifications")]
 impl NotificationServer {
-    /// Only what Popups actually render; later tickets add `actions`
-    /// and the rest as they land.
+    /// Only what Popups actually render; later tickets add the rest as
+    /// they land.
     async fn get_capabilities(&self) -> Vec<String> {
         [
             "body",
             "body-markup",
             "body-hyperlinks",
             "icon-static",
+            "actions",
             "persistence",
         ]
         .map(String::from)
