@@ -399,7 +399,7 @@ window.lucent-stack {{ background: none; box-shadow: none; }}
   {font}
 }}
 .popup label {{ line-height: 1.4; }}
-.popup .app {{ font-weight: 600; font-size: 11.5px; color: {muted}; letter-spacing: 0.01em; }}
+.popup .app {{ font-weight: 600; font-size: 11.5px; color: {muted}; }}
 .popup .time, .popup .pct {{ font-size: 11.5px; color: {muted}; font-feature-settings: "tnum"; }}
 .popup .summary {{ font-weight: 650; font-size: 14px; color: {fg}; }}
 .popup .body {{ color: {muted}; }}
