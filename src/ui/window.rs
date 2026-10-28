@@ -13,10 +13,10 @@ use gtk4::prelude::*;
 use gtk4::{Align, Box as GtkBox, Label, Orientation, Window};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
+use lucent::engine::{Event, NotificationId, Popup};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::Config;
-use crate::notification::{Notification, UiCommand};
 
 /// Margin from screen edges in pixels.
 const SCREEN_MARGIN: i32 = 12;
@@ -40,8 +40,7 @@ fn ease_in_cubic(t: f64) -> f64 {
 /// A live notification popup window on the Wayland layer shell.
 pub struct NotificationWindow {
     pub window: Window,
-    #[allow(dead_code)] // Used for debug logging; will be queried in future refinements.
-    pub id: u32,
+    pub id: NotificationId,
     current_top_offset: Rc<Cell<f64>>,
     animation_epoch: Rc<Cell<u64>>,
 }
@@ -49,11 +48,12 @@ pub struct NotificationWindow {
 impl NotificationWindow {
     /// Create, configure, and present a new notification popup.
     pub fn new(
-        notification: &Notification,
+        popup: &Popup,
         config: &Config,
         top_offset: i32,
-        ui_tx: &UnboundedSender<UiCommand>,
+        events: &UnboundedSender<Event>,
     ) -> Self {
+        let notification = &popup.notification;
         let window = Window::new();
         window.set_decorated(false);
         window.set_resizable(false);
@@ -123,9 +123,9 @@ impl NotificationWindow {
         // ── Click-to-dismiss ─────────────────────────────────────
         let click = gtk4::GestureClick::new();
         let nid = notification.id;
-        let tx = ui_tx.clone();
+        let events = events.clone();
         click.connect_released(move |_, _, _, _| {
-            let _ = tx.send(UiCommand::Close { id: nid, reason: 2 });
+            let _ = events.send(Event::UserDismissed(nid));
         });
         window.add_controller(click);
 
@@ -241,11 +241,7 @@ impl NotificationWindow {
         if let Some(child) = self.window.child() {
             let for_size = {
                 let w = self.window.width();
-                if w > 0 {
-                    w
-                } else {
-                    -1
-                }
+                if w > 0 { w } else { -1 }
             };
             let (_, natural, _, _) = child.measure(Orientation::Vertical, for_size);
             natural

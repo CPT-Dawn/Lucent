@@ -4,8 +4,8 @@
 //! A single global `CssProvider` is built from config values and loaded
 //! once at startup so every notification window inherits the theme.
 
-use gtk4::gdk::Display;
 use gtk4::CssProvider;
+use gtk4::gdk::Display;
 
 use crate::config::Config;
 

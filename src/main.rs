@@ -1,130 +1,112 @@
-//! Lucent — A blazing-fast Wayland notification daemon.
+//! Lucent, a Wayland notification daemon.
 //!
-//! Architecture:
-//!   1. Bootstrap config from `~/.config/lucent/config.toml`
-//!   2. Spawn a tokio thread running the zbus D-Bus server
-//!   3. Run the GTK4 main loop, polling the D-Bus→UI channel
+//! The behaviour lives in the GTK-free, D-Bus-free [`lucent::engine`]. This
+//! binary wires it to its adapters:
 //!
-//! The two threads communicate via `tokio::sync::mpsc` channels:
-//!   - D-Bus → UI:  `UnboundedSender<UiCommand>`  (notification data)
-//!   - UI → D-Bus:  `UnboundedSender<DbusSignal>` (signal emissions)
+//! - the D-Bus adapter ([`dbus`]) runs zbus on its own thread and sends
+//!   engine events over a channel;
+//! - the GLib main loop awaits that channel (no polling), feeds the engine
+//!   and hands its effects to the GTK adapter ([`ui`]), the timer adapter
+//!   ([`timers`]) and back to the D-Bus thread for signals.
 
 mod config;
 mod dbus;
-mod notification;
+mod timers;
 mod ui;
 
-use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc::TryRecvError;
-use std::sync::Arc;
-use std::time::Duration;
 
 use gtk4::glib;
+use lucent::engine::{Effect, Engine, Event, IdAllocator, SystemClock};
+use tokio::sync::{mpsc, oneshot};
+use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // ── 0. Single-instance guard for notification bus name ──────────
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("lucent=info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
     let owner = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(crate::dbus::notifications_name_owner())?;
-
+        .block_on(dbus::notifications_name_owner())?;
     if let Some(owner) = owner {
-        eprintln!("[lucent] Another notification daemon is already running (owner: {owner}).");
-        eprintln!("[lucent] Exiting without error. Stop the existing daemon to run this instance.");
+        tracing::warn!(
+            "another notification daemon ({owner}) owns org.freedesktop.Notifications; \
+             stop it to run Lucent"
+        );
         return Ok(());
     }
 
-    // ── 1. Initialize GTK4 ──────────────────────────────────────────
     gtk4::init()?;
 
-    // ── 2. Load or bootstrap configuration ──────────────────────────
-    let config = Arc::new(config::load_or_create_config()?);
-    eprintln!(
-        "[lucent] v{} starting (width={}px, timeout={}s, max={})",
+    let config = Rc::new(config::load_or_create_config()?);
+    tracing::info!(
+        "v{} starting (width={}px, timeout={}s, max={})",
         env!("CARGO_PKG_VERSION"),
         config.width,
         config.timeout_seconds,
         config.max_visible_notifications,
     );
-
-    // ── 2b. Load CSS theming from config ────────────────────────────
     ui::style::load_css(&config);
 
-    // ── 3. Create inter-thread channels ─────────────────────────────
-    //   D-Bus → UI:  notification commands
-    let (ui_tx, mut ui_rx) = tokio::sync::mpsc::unbounded_channel::<notification::UiCommand>();
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel::<Event>();
+    let (signals_tx, signals_rx) = mpsc::unbounded_channel::<Effect>();
+    let (fatal_tx, fatal_rx) = oneshot::channel::<String>();
 
-    //   UI → D-Bus:  signal emissions (NotificationClosed, ActionInvoked)
-    let (dbus_tx, dbus_rx) = tokio::sync::mpsc::unbounded_channel::<notification::DbusSignal>();
+    let ids = IdAllocator::new();
+    {
+        let events_tx = events_tx.clone();
+        let ids = ids.clone();
+        std::thread::Builder::new()
+            .name("lucent-dbus".into())
+            .spawn(move || {
+                let reason = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => match rt.block_on(dbus::run_server(events_tx, ids, signals_rx)) {
+                        Ok(()) => "D-Bus signal channel closed".to_owned(),
+                        Err(e) => format!("D-Bus server error: {e}"),
+                    },
+                    Err(e) => format!("failed to create tokio runtime: {e}"),
+                };
+                let _ = fatal_tx.send(reason);
+            })?;
+    }
 
-    //   D-Bus thread → UI: fatal startup/runtime errors
-    let (dbus_err_tx, dbus_err_rx) = std::sync::mpsc::channel::<String>();
-
-    // Clone ui_tx for State (used by auto-dismiss timers & click handlers).
-    let ui_tx_for_state = ui_tx.clone();
-
-    // ── 4. Spawn D-Bus server on a dedicated tokio thread ───────────
-    std::thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => rt,
-            Err(e) => {
-                let _ = dbus_err_tx.send(format!("Failed to create tokio runtime: {e}"));
-                return;
-            }
-        };
-
-        rt.block_on(async move {
-            if let Err(e) = crate::dbus::run_server(ui_tx, dbus_rx).await {
-                let _ = dbus_err_tx.send(format!("D-Bus server error: {e}"));
-            }
-        });
-    });
-
-    // ── 5. Set up UI state on the GTK main thread ───────────────────
-    let state = Rc::new(RefCell::new(ui::State::new(
-        config,
-        dbus_tx,
-        ui_tx_for_state,
-    )));
-
+    let mut engine = Engine::new(config.engine_config(), Box::new(SystemClock));
+    let ui = ui::Ui::new(config.clone(), events_tx.clone());
+    let timers = timers::Timers::new(events_tx);
     let main_loop = glib::MainLoop::new(None, false);
 
-    // Poll the D-Bus → UI channel from within the GTK main loop.
-    // 50 ms cadence is imperceptible for notification popups and avoids
-    // busy-waiting while staying responsive.
-    {
-        let state = state.clone();
-        let main_loop = main_loop.clone();
-        glib::timeout_add_local(Duration::from_millis(50), move || {
-            while let Ok(cmd) = ui_rx.try_recv() {
-                state.borrow_mut().handle_command(cmd);
+    glib::spawn_future_local(async move {
+        while let Some(event) = events_rx.recv().await {
+            for effect in engine.handle(event) {
+                ui.apply(&effect);
+                timers.apply(&effect);
+                if dbus::handles(&effect) {
+                    let _ = signals_tx.send(effect);
+                }
             }
+        }
+    });
 
-            match dbus_err_rx.try_recv() {
-                Ok(err) => {
-                    eprintln!("[lucent] {err}");
-                    eprintln!("[lucent] Shutting down due to D-Bus failure.");
-                    main_loop.quit();
-                    glib::ControlFlow::Break
-                }
-                Err(TryRecvError::Disconnected) => {
-                    eprintln!("[lucent] D-Bus thread terminated unexpectedly.");
-                    eprintln!("[lucent] Shutting down.");
-                    main_loop.quit();
-                    glib::ControlFlow::Break
-                }
-                Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
-            }
+    {
+        let main_loop = main_loop.clone();
+        glib::spawn_future_local(async move {
+            let reason = fatal_rx
+                .await
+                .unwrap_or_else(|_| "D-Bus thread terminated unexpectedly".to_owned());
+            tracing::error!("{reason}; shutting down");
+            main_loop.quit();
         });
     }
 
-    // ── 6. Run the GTK main loop ────────────────────────────────────
-    eprintln!("[lucent] Listening for notifications on D-Bus…");
+    tracing::info!("listening for Notifications on D-Bus");
     main_loop.run();
-
     Ok(())
 }

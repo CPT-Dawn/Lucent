@@ -4,8 +4,11 @@
 //! embedded default is written to disk so the user always has a template
 //! to customise.
 
-use serde::Deserialize;
 use std::path::PathBuf;
+use std::time::Duration;
+
+use lucent::engine::{EngineConfig, Timeouts};
+use serde::Deserialize;
 
 /// The beautifully commented default configuration, baked into the binary
 /// at compile time via `include_str!`.
@@ -13,7 +16,6 @@ const DEFAULT_CONFIG: &str = include_str!("../default_config.toml");
 
 /// Strongly-typed configuration parsed from the user's TOML file.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // Fields consumed in Phase 4 UI rendering.
 pub struct Config {
     /// Width of the notification popup in pixels.
     pub width: u32,
@@ -34,6 +36,20 @@ pub struct Config {
     pub font_family: String,
     /// Maximum notifications visible at once; extras are queued.
     pub max_visible_notifications: u32,
+}
+
+impl Config {
+    /// The engine's view of this config. v1 has a single timeout for every
+    /// Urgency; `0` means Popups never expire.
+    pub fn engine_config(&self) -> EngineConfig {
+        let timeout = (self.timeout_seconds > 0)
+            .then(|| Duration::from_secs(u64::from(self.timeout_seconds)));
+        EngineConfig {
+            max_visible: self.max_visible_notifications as usize,
+            timeouts: Timeouts::uniform(timeout),
+            ..EngineConfig::default()
+        }
+    }
 }
 
 fn default_border_width() -> u32 {
@@ -58,7 +74,7 @@ pub fn load_or_create_config() -> Result<Config, Box<dyn std::error::Error>> {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&path, DEFAULT_CONFIG)?;
-        eprintln!("[lucent] Wrote default config to {}", path.display());
+        tracing::info!("wrote default config to {}", path.display());
     }
 
     let contents = std::fs::read_to_string(&path)?;

@@ -1,188 +1,114 @@
-//! UI module — notification window management, stacking, and lifecycle.
-//!
-//! All state lives exclusively on the GTK main thread and is driven by
-//! `UiCommand` messages received from the D-Bus thread via an mpsc channel.
+//! GTK adapter: draws the Popups the engine asks for and turns clicks into
+//! engine events. All state lives on the GTK main thread.
 
 pub mod style;
 pub mod window;
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::time::Duration;
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
 
 use gtk4::glib;
+use lucent::engine::{Effect, Event, NotificationId, Popup};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::Config;
-use crate::notification::{DbusSignal, Notification, UiCommand};
 use window::NotificationWindow;
 
-/// Vertical gap between stacked notifications.
+/// Vertical gap between stacked Popups.
 const STACK_GAP: i32 = 10;
-/// Fallback height used before a popup is fully measured.
+/// Height assumed for a Popup that hasn't been measured yet.
 const FALLBACK_HEIGHT: i32 = 90;
 
-/// Shared UI state managed exclusively on the GTK main thread.
-pub struct State {
-    config: Arc<Config>,
-    /// Channel to emit D-Bus signals back to the bus thread.
-    dbus_tx: UnboundedSender<DbusSignal>,
-    /// Channel to send commands to ourselves (used by auto-dismiss timers).
-    ui_tx: UnboundedSender<UiCommand>,
-    /// Active notification windows, keyed by notification ID.
-    active: HashMap<u32, NotificationWindow>,
-    /// Display order of notification IDs (top to bottom).
-    display_order: Vec<u32>,
-    /// Queued notifications when `max_visible_notifications` is reached.
-    pending: VecDeque<Notification>,
+/// The Popups on screen.
+pub struct Ui {
+    config: Rc<Config>,
+    events: UnboundedSender<Event>,
+    /// Popup windows, oldest (top) first.
+    windows: Rc<RefCell<Vec<NotificationWindow>>>,
 }
 
-impl State {
-    pub fn new(
-        config: Arc<Config>,
-        dbus_tx: UnboundedSender<DbusSignal>,
-        ui_tx: UnboundedSender<UiCommand>,
-    ) -> Self {
+impl Ui {
+    pub fn new(config: Rc<Config>, events: UnboundedSender<Event>) -> Self {
         Self {
             config,
-            dbus_tx,
-            ui_tx,
-            active: HashMap::new(),
-            display_order: Vec::new(),
-            pending: VecDeque::new(),
+            events,
+            windows: Rc::default(),
         }
     }
 
-    /// Process an incoming command from the D-Bus thread or auto-dismiss timer.
-    pub fn handle_command(&mut self, cmd: UiCommand) {
-        match cmd {
-            UiCommand::Show(notification) => self.show_notification(notification),
-            UiCommand::Close { id, reason } => self.close_notification(id, reason),
-            UiCommand::Reflow => self.restack(),
-        }
-    }
-
-    // ── Private helpers ──────────────────────────────────────────
-
-    /// Display a notification, or queue it if at max capacity.
-    fn show_notification(&mut self, notification: Notification) {
-        let id = notification.id;
-        let expire_timeout = notification.expire_timeout;
-
-        // If this replaces an existing notification, remove it silently.
-        if self.active.contains_key(&id) {
-            if let Some(nw) = self.active.remove(&id) {
-                self.display_order.retain(|&x| x != id);
-                nw.fade_out_and_destroy();
+    /// Apply one engine effect. Effects that aren't about Popups are
+    /// ignored.
+    pub fn apply(&self, effect: &Effect) {
+        match effect {
+            Effect::ShowPopup(popup) => self.show(popup),
+            Effect::UpdatePopup(popup) => self.update(popup),
+            Effect::RemovePopup { id, reason } => {
+                tracing::debug!(id, reason = reason.code(), "removing Popup");
+                self.remove(*id);
             }
+            _ => {}
         }
+    }
 
-        // Queue if at max capacity.
-        if self.active.len() >= self.config.max_visible_notifications as usize {
-            eprintln!("[lucent] Queuing notification #{id} (at max visible)");
-            self.pending.push_back(notification);
-            return;
-        }
-
-        // Calculate vertical position based on measured heights.
-        let top_offset = self.next_top_offset();
-
-        eprintln!(
-            "[lucent] #{} from \"{}\" — {}",
-            id, notification.app_name, notification.summary,
-        );
-
-        // Create the layer-shell window.
-        let nw = NotificationWindow::new(&notification, &self.config, top_offset, &self.ui_tx);
-
-        self.display_order.push(id);
-        self.active.insert(id, nw);
-
-        // Reflow once immediately and once after first layout pass to handle
-        // text wrapping and exact measured heights.
+    fn show(&self, popup: &Popup) {
+        let n = &popup.notification;
+        tracing::info!(id = n.id, app = %n.app_name, summary = %n.summary, "showing Popup");
+        let top = stack_height(&self.windows.borrow());
+        let window = NotificationWindow::new(popup, &self.config, top, &self.events);
+        self.windows.borrow_mut().push(window);
         self.restack();
-        {
-            let ui_tx = self.ui_tx.clone();
-            glib::timeout_add_local_once(Duration::from_millis(30), move || {
-                let _ = ui_tx.send(UiCommand::Reflow);
-            });
-        }
+    }
 
-        // Schedule auto-dismiss timer.
-        let timeout = if expire_timeout < 0 {
-            // Use the server default.
-            Duration::from_secs(self.config.timeout_seconds as u64)
-        } else if expire_timeout == 0 {
-            // `0` means "never expires".
+    /// Rebuild a visible Popup with new contents, keeping its place.
+    fn update(&self, popup: &Popup) {
+        let mut windows = self.windows.borrow_mut();
+        let Some(index) = windows.iter().position(|w| w.id == popup.id()) else {
             return;
-        } else {
-            Duration::from_millis(expire_timeout as u64)
         };
+        let top = stack_height(&windows[..index]);
+        let fresh = NotificationWindow::new(popup, &self.config, top, &self.events);
+        std::mem::replace(&mut windows[index], fresh).fade_out_and_destroy();
+        drop(windows);
+        self.restack();
+    }
 
-        let ui_tx = self.ui_tx.clone();
-        glib::timeout_add_local_once(timeout, move || {
-            let _ = ui_tx.send(UiCommand::Close { id, reason: 1 });
+    fn remove(&self, id: NotificationId) {
+        let mut windows = self.windows.borrow_mut();
+        if let Some(index) = windows.iter().position(|w| w.id == id) {
+            windows.remove(index).fade_out_and_destroy();
+        }
+        drop(windows);
+        self.restack();
+    }
+
+    /// Move every Popup to its slot now, and once more after GTK has laid
+    /// out new windows and their heights are known.
+    fn restack(&self) {
+        restack(&self.windows.borrow());
+        let windows: Weak<_> = Rc::downgrade(&self.windows);
+        glib::idle_add_local_once(move || {
+            if let Some(windows) = windows.upgrade() {
+                restack(&windows.borrow());
+            }
         });
     }
+}
 
-    /// Close and remove a notification, emitting the D-Bus signal.
-    fn close_notification(&mut self, id: u32, reason: u32) {
-        if let Some(nw) = self.active.remove(&id) {
-            self.display_order.retain(|&x| x != id);
-
-            // Tell the D-Bus thread to emit NotificationClosed.
-            let _ = self.dbus_tx.send(DbusSignal::Closed { id, reason });
-
-            // Fade out the detached window (fire-and-forget).
-            nw.fade_out_and_destroy();
-
-            eprintln!("[lucent] Closed #{id} (reason {reason})");
-
-            // Reposition remaining windows.
-            self.restack();
-
-            // Show next queued notification if a slot opened up.
-            self.show_next_pending();
-        }
-        // Silently ignore close for unknown IDs (e.g. duplicate timer fire).
+fn restack(windows: &[NotificationWindow]) {
+    let mut offset = 0;
+    for window in windows {
+        window.set_top_offset(offset);
+        offset += height(window) + STACK_GAP;
     }
+}
 
-    /// Recalculate top offsets for all active windows after a removal.
-    fn restack(&self) {
-        let mut offset = 0;
-        for id in &self.display_order {
-            if let Some(nw) = self.active.get(id) {
-                nw.set_top_offset(offset);
-                offset += self.height_for_window(nw) + STACK_GAP;
-            }
-        }
-    }
+fn stack_height(windows: &[NotificationWindow]) -> i32 {
+    windows.iter().map(|w| height(w) + STACK_GAP).sum()
+}
 
-    fn next_top_offset(&self) -> i32 {
-        let mut offset = 0;
-        for id in &self.display_order {
-            if let Some(nw) = self.active.get(id) {
-                offset += self.height_for_window(nw) + STACK_GAP;
-            }
-        }
-        offset
-    }
-
-    fn height_for_window(&self, window: &NotificationWindow) -> i32 {
-        let measured = window.measured_height();
-        if measured > 0 {
-            measured
-        } else {
-            FALLBACK_HEIGHT
-        }
-    }
-
-    /// Pop the next queued notification and show it (if a slot is free).
-    fn show_next_pending(&mut self) {
-        if self.active.len() < self.config.max_visible_notifications as usize {
-            if let Some(notification) = self.pending.pop_front() {
-                self.show_notification(notification);
-            }
-        }
+fn height(window: &NotificationWindow) -> i32 {
+    match window.measured_height() {
+        h if h > 0 => h,
+        _ => FALLBACK_HEIGHT,
     }
 }
