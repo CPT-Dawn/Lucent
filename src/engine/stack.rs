@@ -21,6 +21,14 @@ impl Stack {
         self.visible.iter().map(Popup::id).collect()
     }
 
+    /// The Notification behind a visible Popup.
+    pub fn visible(&self, id: NotificationId) -> Option<&Notification> {
+        self.visible
+            .iter()
+            .find(|p| p.id() == id)
+            .map(|p| &p.notification)
+    }
+
     pub fn remove_visible(&mut self, id: NotificationId) -> Option<Popup> {
         let index = self.visible.iter().position(|p| p.id() == id)?;
         Some(self.visible.remove(index))
