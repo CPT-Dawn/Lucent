@@ -28,7 +28,8 @@
 
 # [timeout]
 ## Seconds a Popup stays, by Urgency; 0 means it stays until dismissed.
-## An app that sets its own timeout always wins.
+## An app that sets its own timeout wins for low and normal. Critical
+## ignores it and uses `critical` (a Rule's timeout still wins over both).
 # low = 3
 # normal = 5
 # critical = 0

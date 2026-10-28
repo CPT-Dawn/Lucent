@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use super::{Engine, Expiry, Notification, Urgency};
+use super::{Engine, Notification, Urgency};
 
 /// The configured Rules, in file order (`[[rule]]` in the config).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -104,6 +104,8 @@ pub(super) struct RuleOutcome {
     pub show: bool,
     /// Record in History (`history = true`).
     pub record: bool,
+    /// The Rule's own timeout, which wins over every other expiry.
+    pub timeout: Option<RuleTimeout>,
 }
 
 impl Default for RuleOutcome {
@@ -111,29 +113,26 @@ impl Default for RuleOutcome {
         Self {
             show: true,
             record: true,
+            timeout: None,
         }
     }
 }
 
 impl Engine {
-    /// Apply the first matching Rule. It may change the Notification
-    /// (timeout, Urgency) and decides whether it shows and is recorded.
+    /// Apply the first matching Rule. It may change the Notification's
+    /// Urgency, and decides its timeout and whether it shows and is
+    /// recorded.
     pub(super) fn apply_rules(&self, notification: &mut Notification) -> RuleOutcome {
         let Some(rule) = self.config.rules.0.iter().find(|r| r.matches(notification)) else {
             return RuleOutcome::default();
         };
-        if let Some(timeout) = rule.timeout {
-            notification.expiry = match timeout {
-                RuleTimeout::After(after) => Expiry::After(after),
-                RuleTimeout::Never => Expiry::Never,
-            };
-        }
         if let Some(urgency) = rule.urgency {
             notification.hints.urgency = urgency;
         }
         RuleOutcome {
             show: !rule.hide,
             record: rule.history,
+            timeout: rule.timeout,
         }
     }
 }
@@ -267,6 +266,33 @@ mod tests {
         h.notify(notification(1).app("spotify").expires_after(secs(30)));
 
         assert_eq!(closed(&h.advance(secs(2))), [(1, CloseReason::Expired)]);
+    }
+
+    #[test]
+    fn a_rule_timeout_still_applies_to_a_critical_notification() {
+        let mut h = with_rules([Rule {
+            timeout: Some(RuleTimeout::After(secs(2))),
+            ..rule("backup", "")
+        }]);
+        h.notify(
+            notification(1)
+                .app("backup")
+                .urgency(Urgency::Critical)
+                .expires_after(secs(30)),
+        );
+
+        assert_eq!(closed(&h.advance(secs(2))), [(1, CloseReason::Expired)]);
+    }
+
+    #[test]
+    fn a_rule_raising_urgency_to_critical_also_drops_the_apps_expiry() {
+        let mut h = with_rules([Rule {
+            urgency: Some(Urgency::Critical),
+            ..rule("pager", "")
+        }]);
+        h.notify(notification(1).app("pager").expires_after(secs(2)));
+
+        assert!(h.advance(secs(3_600)).is_empty());
     }
 
     #[test]

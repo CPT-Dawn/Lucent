@@ -114,15 +114,31 @@ mod tests {
             ..EngineConfig::default()
         });
         h.notify(notification(1).expires_after(secs(10)));
-        h.notify(
-            notification(2)
-                .urgency(Urgency::Critical)
-                .expires_after(secs(3)),
-        );
+        h.notify(notification(2).urgency(Urgency::Low).expires_after(secs(3)));
 
         assert!(h.advance(secs(1)).is_empty());
         assert_eq!(closed(&h.advance(secs(2))), expired(2));
         assert_eq!(closed(&h.advance(secs(7))), expired(1));
+    }
+
+    #[test]
+    fn a_critical_timeout_applies_even_when_the_app_asks_for_its_own() {
+        let mut h = Harness::with_config(EngineConfig {
+            timeouts: timeouts(1, 1, Some(4)),
+            ..EngineConfig::default()
+        });
+        h.notify(
+            notification(1)
+                .urgency(Urgency::Critical)
+                .expires_after(secs(1)),
+        );
+        h.notify(notification(2).urgency(Urgency::Critical).never_expires());
+
+        assert!(h.advance(millis(3_999)).is_empty());
+        assert_eq!(
+            closed(&h.advance(millis(1))),
+            vec![(1, CloseReason::Expired), (2, CloseReason::Expired)]
+        );
     }
 
     #[test]

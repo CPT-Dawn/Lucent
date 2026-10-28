@@ -1,5 +1,6 @@
 //! Receiving, replacing and closing Notifications.
 
+use super::expiry::settle_expiry;
 use super::{CloseReason, Effect, Engine, Notification, NotificationId};
 
 impl Engine {
@@ -8,6 +9,7 @@ impl Engine {
     /// change, so the Popup appears first.
     pub(super) fn receive(&mut self, mut notification: Notification, out: &mut Vec<Effect>) {
         let outcome = self.apply_rules(&mut notification);
+        settle_expiry(&mut notification, outcome.timeout);
         if outcome.show && self.dnd_allows(&notification) {
             self.present(notification.clone(), out);
         }

@@ -109,6 +109,7 @@ max_visible = 3              # the rest wait behind a "+N more" pill
 
 [timeout]
 normal = 8                   # seconds; low is 3 and critical is 0 (until dismissed)
+                             # apps may set their own timeout, except for critical
 
 [look]
 accent = "#7dd3fc"           # replaces the Theme's gradient

@@ -4,7 +4,10 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use super::{CloseReason, Effect, Engine, Expiry, Notification, NotificationId, Popup, Timer};
+use super::{
+    CloseReason, Effect, Engine, Expiry, Notification, NotificationId, Popup, RuleTimeout, Timer,
+    Urgency,
+};
 
 /// The countdown of each visible Popup that expires, and which Popups are
 /// under the pointer.
@@ -23,9 +26,25 @@ enum Countdown {
     Paused(Duration),
 }
 
+/// Settle a received Notification's expiry once Rules have run.
+///
+/// A Rule's timeout wins over everything. Otherwise a Critical
+/// Notification ignores the app's own `expire_timeout`: it stays for
+/// `timeout.critical` (never, by default) or until dismissed. Low and
+/// normal keep the app's own expiry.
+pub(super) fn settle_expiry(notification: &mut Notification, rule_timeout: Option<RuleTimeout>) {
+    notification.expiry = match rule_timeout {
+        Some(RuleTimeout::After(after)) => Expiry::After(after),
+        Some(RuleTimeout::Never) => Expiry::Never,
+        None if notification.hints.urgency == Urgency::Critical => Expiry::Default,
+        None => notification.expiry,
+    };
+}
+
 impl Engine {
     /// How long a Popup for this Notification stays; `None` means never.
-    /// The app's own expiry wins; otherwise the Urgency default applies.
+    /// An explicit expiry (the app's or a Rule's, see [`settle_expiry`])
+    /// wins; otherwise the Urgency default applies.
     pub(super) fn timeout_for(&self, notification: &Notification) -> Option<Duration> {
         match notification.expiry {
             Expiry::After(after) => Some(after),
@@ -170,14 +189,23 @@ mod tests {
     fn the_apps_own_expiry_wins_over_the_urgency_default() {
         let mut h = Harness::new();
         h.notify(notification(1).expires_after(millis(1_500)));
+        h.notify(notification(2).urgency(Urgency::Low).expires_after(secs(2)));
+
+        assert_eq!(closed(&h.advance(millis(1_500))), expired(1));
+        assert_eq!(closed(&h.advance(millis(500))), expired(2));
+    }
+
+    #[test]
+    fn a_critical_notification_ignores_the_apps_own_expiry() {
+        let mut h = Harness::new();
         h.notify(
-            notification(2)
+            notification(1)
                 .urgency(Urgency::Critical)
                 .expires_after(secs(2)),
         );
 
-        assert_eq!(closed(&h.advance(millis(1_500))), expired(1));
-        assert_eq!(closed(&h.advance(millis(500))), expired(2));
+        assert!(h.pending_timers().is_empty());
+        assert!(h.advance(secs(3_600)).is_empty());
     }
 
     #[test]
