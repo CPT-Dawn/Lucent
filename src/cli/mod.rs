@@ -22,12 +22,19 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+/// Shown under `lucent --help`.
+const GETTING_STARTED: &str = "\
+New here? Start Lucent, then run `lucent demo` to see every kind of Popup.
+Settings live in ~/.config/lucent/config.toml: Lucent writes a commented one
+on first start and picks up changes as soon as you save.
+`lucent help <command>` tells you more about any command.";
+
 /// Notifications that don't nag, they glow.
 ///
 /// Run with no subcommand to start the notification daemon (D-Bus also
 /// starts it by itself when an app sends a Notification).
 #[derive(Debug, Parser)]
-#[command(name = "lucent", version, about, long_about)]
+#[command(name = "lucent", version, about, long_about, after_help = GETTING_STARTED)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -116,5 +123,46 @@ impl Command {
             Self::Dnd { change } => dnd::run(change),
             Self::Status { follow } => status::run(follow),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::*;
+
+    #[test]
+    fn the_command_line_is_well_formed() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn every_subcommand_and_flag_is_described_in_one_line() {
+        let cli = Cli::command();
+        for sub in cli.get_subcommands() {
+            let name = sub.get_name();
+            let about = sub.get_about().map(|a| a.to_string()).unwrap_or_default();
+            assert!(!about.is_empty(), "`lucent {name}` has no help");
+            assert!(
+                !about.contains('\n'),
+                "`lucent {name}` takes more than a line"
+            );
+            for arg in sub.get_arguments() {
+                let id = arg.get_id();
+                assert!(arg.get_help().is_some(), "`lucent {name} {id}` has no help");
+            }
+        }
+        for arg in cli.get_arguments() {
+            let id = arg.get_id();
+            assert!(arg.get_help().is_some(), "`lucent --{id}` has no help");
+        }
+    }
+
+    #[test]
+    fn the_help_points_newcomers_at_the_demo_and_the_config() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("lucent demo"), "{help}");
+        assert!(help.contains("config.toml"), "{help}");
     }
 }
