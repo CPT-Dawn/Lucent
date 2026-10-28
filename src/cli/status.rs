@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use futures_util::StreamExt;
 use serde_json::json;
 
-use super::daemon::{is_not_running, with_daemon};
+use super::daemon::{is_not_running, not_running_message, with_daemon};
 use crate::dbus::control::{ControlProxy, StatusItem};
 
 pub fn run(follow: bool) -> ExitCode {
@@ -27,14 +27,16 @@ pub fn run(follow: bool) -> ExitCode {
 ///
 /// A daemon that isn't running has an empty History and Do Not Disturb off
 /// (both reset on launch), so that is what is shown until it starts, and
-/// again if it stops.
+/// again if it stops. The first time that happens, stderr says what to do
+/// about it; stdout stays pure JSON for the bar.
 async fn follow(lucent: ControlProxy<'static>) -> zbus::Result<ExitCode> {
     // Subscribe before asking, so no change can slip in between.
     let mut changes = lucent.receive_status_changed().await?;
     let mut owners = lucent.inner().receive_owner_changed().await?;
+    let mut absent = Absent::default();
     let status = match lucent.status().await {
         Ok(status) => status,
-        Err(e) if is_not_running(&e) => StatusItem::default(),
+        Err(e) if is_not_running(&e) => absent.status(&lucent).await,
         Err(e) => return Err(e),
     };
     if let Some(done) = print(status) {
@@ -54,10 +56,10 @@ async fn follow(lucent: ControlProxy<'static>) -> zbus::Result<ExitCode> {
                 // A freshly started daemon: ask rather than assume.
                 Some(_) => match lucent.status().await {
                     Ok(status) => status,
-                    Err(e) if is_not_running(&e) => StatusItem::default(),
+                    Err(e) if is_not_running(&e) => absent.status(&lucent).await,
                     Err(e) => return Err(e),
                 },
-                None => StatusItem::default(),
+                None => absent.status(&lucent).await,
             },
             else => return Ok(ExitCode::SUCCESS),
         };
@@ -68,6 +70,24 @@ async fn follow(lucent: ControlProxy<'static>) -> zbus::Result<ExitCode> {
             return Ok(done);
         }
         shown = status;
+    }
+}
+
+/// The status while Lucent isn't running, with a next step on stderr the
+/// first time only, so a bar's log doesn't fill up with it.
+#[derive(Default)]
+struct Absent {
+    told: bool,
+}
+
+impl Absent {
+    async fn status(&mut self, lucent: &ControlProxy<'static>) -> StatusItem {
+        if !self.told {
+            self.told = true;
+            let message = not_running_message(lucent.inner().connection()).await;
+            eprintln!("lucent: {}", message.trim_end());
+        }
+        StatusItem::default()
     }
 }
 

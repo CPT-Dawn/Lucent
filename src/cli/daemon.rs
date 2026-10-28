@@ -52,6 +52,12 @@ where
     }
 }
 
+/// What to do about Lucent not running, for a command that carries on
+/// without it (`lucent status --follow`).
+pub async fn not_running_message(conn: &zbus::Connection) -> String {
+    Unreachable::NotRunning(notifications_owner(conn).await.ok().flatten()).message()
+}
+
 /// Why a subcommand couldn't talk to Lucent.
 #[derive(Debug)]
 enum Unreachable {
