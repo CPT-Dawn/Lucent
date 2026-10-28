@@ -11,6 +11,8 @@
 
 use std::fmt::Write as _;
 
+use lucent::config::{Config, Position};
+
 /// A colour with straight (not premultiplied) alpha.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rgba {
@@ -21,13 +23,13 @@ pub struct Rgba {
 }
 
 impl Rgba {
-    pub const fn rgba(r: u8, g: u8, b: u8, a: f32) -> Self {
+    pub const fn new(r: u8, g: u8, b: u8, a: f32) -> Self {
         Self { r, g, b, a }
     }
 
     /// An opaque colour from `0xRRGGBB`.
     pub const fn hex(rgb: u32) -> Self {
-        Self::rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, 1.0)
+        Self::new((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, 1.0)
     }
 
     pub fn with_alpha(self, a: f32) -> Self {
@@ -64,7 +66,7 @@ impl Rgba {
         };
         let m = lightness - c / 2.0;
         let channel = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
-        Self::rgba(channel(r), channel(g), channel(b), 1.0)
+        Self::new(channel(r), channel(g), channel(b), 1.0)
     }
 }
 
@@ -121,11 +123,11 @@ impl Theme {
         let accent_1 = Rgba::hex(0xff9a62);
         Self {
             name: "dawn",
-            background: Rgba::rgba(22, 17, 34, 0.76),
+            background: Rgba::new(22, 17, 34, 0.76),
             foreground: Rgba::hex(0xf2ecfb),
-            muted: Rgba::rgba(242, 236, 251, 0.6),
-            line: Rgba::rgba(255, 255, 255, 0.09),
-            chip: Rgba::rgba(255, 255, 255, 0.08),
+            muted: Rgba::new(242, 236, 251, 0.6),
+            line: Rgba::new(255, 255, 255, 0.09),
+            chip: Rgba::new(255, 255, 255, 0.08),
             accent_1,
             accent_2: Rgba::hex(0xcf6bff),
             critical: Rgba::hex(0xff5d6c),
@@ -134,13 +136,13 @@ impl Theme {
                     y: 18,
                     blur: 40,
                     spread: -14,
-                    color: Rgba::rgba(8, 4, 20, 0.65),
+                    color: Rgba::new(8, 4, 20, 0.65),
                 },
                 Shadow {
                     y: 2,
                     blur: 8,
                     spread: 0,
-                    color: Rgba::rgba(8, 4, 20, 0.3),
+                    color: Rgba::new(8, 4, 20, 0.3),
                 },
             ],
             primary_action: accent_1,
@@ -171,7 +173,7 @@ impl Theme {
 const CRITICAL_GLOW: i32 = 4;
 
 /// Sizes and switches for Popups. `Default` is the spec's defaults.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Look {
     /// Card width.
     pub width: i32,
@@ -187,23 +189,44 @@ pub struct Look {
     pub gap: i32,
     /// Distance from the screen edges.
     pub margin: i32,
+    pub position: Position,
+    /// Font family; `None` means the system UI font.
+    pub font: Option<String>,
 }
 
 impl Default for Look {
     fn default() -> Self {
-        Self {
-            width: 380,
-            radius: 14,
-            icon_size: 40,
-            tile: 42,
-            countdown: true,
-            gap: 10,
-            margin: 16,
-        }
+        Self::from_config(&Config::default())
     }
 }
 
 impl Look {
+    /// The Look a config asks for (`[popup]` and `[look]`). Opacity and
+    /// accent belong to the Theme, not here.
+    pub fn from_config(config: &Config) -> Self {
+        let px = |n: u32| i32::try_from(n).unwrap_or(i32::MAX);
+        Self {
+            width: px(config.popup.width),
+            radius: px(config.look.radius),
+            icon_size: px(config.look.icon_size),
+            tile: 42,
+            countdown: config.look.countdown,
+            gap: px(config.popup.gap),
+            margin: px(config.popup.margin),
+            position: config.popup.position,
+            font: config.look.font.clone(),
+        }
+    }
+
+    /// The `font-family` declaration, if a font is set. Without one GTK
+    /// uses the system UI font.
+    fn font_rule(&self) -> String {
+        self.font
+            .as_deref()
+            .map(|font| format!("font-family: \"{}\";", font.replace('"', "\\\"")))
+            .unwrap_or_default()
+    }
+
     /// Corner radius of the icon tile (12px on the 42px tile).
     pub fn tile_radius(&self) -> f64 {
         f64::from(self.tile) * 12.0 / 42.0
@@ -247,6 +270,7 @@ window.lucent-stack {{ background: none; box-shadow: none; }}
   border-radius: {radius}px;
   box-shadow: {shadow};
   font-size: 13px;
+  {font}
 }}
 .popup label {{ line-height: 1.4; }}
 .popup .app {{ font-weight: 600; font-size: 11.5px; color: {muted}; letter-spacing: 0.01em; }}
@@ -268,7 +292,7 @@ window.lucent-stack {{ background: none; box-shadow: none; }}
   transition: opacity 150ms;
 }}
 .popup button.close image {{ -gtk-icon-size: 12px; }}
-.popup:hover button.close, .popup:focus-within button.close {{ opacity: 1; }}
+.popup:hover button.close {{ opacity: 1; }}
 
 .popup.low {{ opacity: 0.92; }}
 .popup.critical {{
@@ -292,6 +316,7 @@ window.lucent-stack {{ background: none; box-shadow: none; }}
         chip = theme.chip.css(),
         a1 = theme.accent_1.css(),
         radius = look.radius,
+        font = look.font_rule(),
         crit70 = theme.critical.with_alpha(0.7).css(),
         glow_off = glow(0.0),
         glow_on = glow(0.22),
@@ -343,6 +368,21 @@ mod tests {
         assert_eq!(Rgba::hsl(0.0, 1.0, 0.5), Rgba::hex(0xff0000));
         assert_eq!(Rgba::hsl(120.0, 1.0, 0.5), Rgba::hex(0x00ff00));
         assert_eq!(Rgba::hsl(240.0, 1.0, 0.25), Rgba::hex(0x000080));
+    }
+
+    #[test]
+    fn the_look_follows_the_config() {
+        let mut config = Config::default();
+        config.popup.width = 420;
+        config.look.radius = 20;
+        config.look.font = Some("Inter".into());
+
+        let look = Look::from_config(&config);
+
+        assert_eq!(look.width, 420);
+        assert!(css(&Theme::dawn(), &look).contains("border-radius: 20px;"));
+        assert!(css(&Theme::dawn(), &look).contains("font-family: \"Inter\";"));
+        assert!(!css(&Theme::dawn(), &Look::default()).contains("font-family"));
     }
 
     #[test]
