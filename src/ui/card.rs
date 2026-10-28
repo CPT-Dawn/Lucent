@@ -7,7 +7,7 @@
 //! │  │   media: Overlay around the 42px tile, 5px larger on each side so the
 //! │  │          app badge (and the progress ring, #7) can overhang it
 //! │  │   main:  .head (.app · .time) / .summary / .body (3 lines)
-//! │  └─ Action row (#6), when the Notification has Actions
+//! │  └─ .actions: one button per Action but "default", the first .primary
 //! ├─ button.close (top right, shown on hover)
 //! └─ countdown line (bottom edge)
 //! ```
@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use gtk4::prelude::*;
 use gtk4::{Align, Box as GtkBox, Label, Orientation, Overlay, gdk, gio, glib, pango};
-use lucent::engine::{Event, Notification, NotificationId, Popup, Urgency};
+use lucent::engine::{Action, Event, Notification, NotificationId, Popup, Urgency};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::ago::{ago, until_change};
@@ -41,6 +41,8 @@ pub struct Card {
     pub id: NotificationId,
     root: Overlay,
     shared: Rc<Shared>,
+    /// For the Action buttons, rebuilt when the Notification is replaced.
+    events: UnboundedSender<Event>,
 }
 
 /// What the card's signal handlers need.
@@ -131,10 +133,13 @@ impl Card {
         {
             let events = events.clone();
             let shared = Rc::downgrade(&shared);
-            click.connect_released(move |gesture, _, _, _| {
+            click.connect_released(move |gesture, _, x, y| {
                 let Some(shared) = shared.upgrade() else {
                     return;
                 };
+                if gesture.current_button() == gdk::BUTTON_PRIMARY && on_button(gesture, x, y) {
+                    return;
+                }
                 if let Some(event) =
                     click_event(gesture.current_button(), &shared.notification.borrow())
                 {
@@ -144,7 +149,12 @@ impl Card {
         }
         root.add_controller(click);
 
-        let card = Self { id, root, shared };
+        let card = Self {
+            id,
+            root,
+            shared,
+            events: events.clone(),
+        };
         card.fill(popup);
         card
     }
@@ -189,7 +199,7 @@ impl Card {
 
         let content = GtkBox::new(Orientation::Vertical, 0);
         content.append(&top_row(popup, look));
-        if let Some(actions) = action_row(n) {
+        if let Some(actions) = action_row(n, &self.events) {
             content.append(&actions);
         }
         self.root.set_child(Some(&content));
@@ -498,16 +508,84 @@ fn keep_time_fresh(time: &Label, received_at: Instant) {
     });
 }
 
-/// The full-width Action row. Ticket #6 builds it; until then Popups show
-/// no Action buttons.
-fn action_row(_notification: &Notification) -> Option<gtk4::Widget> {
-    None
+/// The Actions that get a button. "default" has none: a click on the
+/// body invokes it.
+fn buttons(notification: &Notification) -> Vec<&Action> {
+    notification
+        .actions
+        .iter()
+        .filter(|a| a.key != "default")
+        .collect()
+}
+
+/// The full-width Action row: equal buttons divided by hairlines, the
+/// first one primary.
+fn action_row(
+    notification: &Notification,
+    events: &UnboundedSender<Event>,
+) -> Option<gtk4::Widget> {
+    let actions = buttons(notification);
+    if actions.is_empty() {
+        return None;
+    }
+    let row = GtkBox::new(Orientation::Horizontal, 0);
+    row.add_css_class("actions");
+    row.set_homogeneous(true);
+    for (index, action) in actions.into_iter().enumerate() {
+        let text = if action.label.is_empty() {
+            &action.key
+        } else {
+            &action.label
+        };
+        let label = Label::new(Some(text));
+        label.set_ellipsize(pango::EllipsizeMode::End);
+        let button = gtk4::Button::new();
+        button.set_child(Some(&label));
+        button.set_tooltip_text(Some(text));
+        button.set_can_focus(false);
+        if index == 0 {
+            button.add_css_class("primary");
+        }
+        let events = events.clone();
+        let id = notification.id;
+        let key = action.key.clone();
+        button.connect_clicked(move |_| {
+            send(
+                &events,
+                Event::ActionInvoked {
+                    id,
+                    key: key.clone(),
+                },
+            );
+        });
+        row.append(&button);
+    }
+    Some(row.upcast())
+}
+
+/// Whether a primary click landed on a button (an Action or close), which
+/// handles it itself.
+fn on_button(gesture: &gtk4::GestureClick, x: f64, y: f64) -> bool {
+    let Some(card) = gesture.widget() else {
+        return false;
+    };
+    let mut widget = card.pick(x, y, gtk4::PickFlags::DEFAULT);
+    while let Some(w) = widget {
+        if w == card {
+            break;
+        }
+        if w.is::<gtk4::Button>() {
+            return true;
+        }
+        widget = w.parent();
+    }
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lucent::engine::{Action, Expiry};
+    use lucent::engine::Expiry;
 
     fn notification(actions: &[&str]) -> Notification {
         Notification {
@@ -545,6 +623,14 @@ mod tests {
             click_event(1, &notification(&["reply"])),
             Some(Event::UserDismissed(7))
         );
+    }
+
+    #[test]
+    fn every_action_but_default_gets_a_button_in_the_apps_order() {
+        let n = notification(&["reply", "default", "read"]);
+        let keys: Vec<_> = buttons(&n).iter().map(|a| a.key.as_str()).collect();
+        assert_eq!(keys, ["reply", "read"]);
+        assert!(buttons(&notification(&["default"])).is_empty());
     }
 
     #[test]

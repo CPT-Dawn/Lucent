@@ -321,8 +321,35 @@ window.lucent-stack {{ background: none; box-shadow: none; }}
         glow_off = glow(0.0),
         glow_on = glow(0.22),
     );
+    css.push_str(&action_row_css(theme));
     css.push_str(&pill_css(theme, &shadow));
     css
+}
+
+/// The Action row: equal buttons divided by hairlines, the first in the
+/// Theme's primary Action colour.
+fn action_row_css(theme: &Theme) -> String {
+    format!(
+        r#"
+.popup .actions {{ border-top: 1px solid {line}; }}
+.popup .actions > button {{
+  all: unset;
+  padding: 10px 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: {fg};
+  transition: background-color 150ms;
+}}
+.popup .actions > button > label {{ margin: 0; }}
+.popup .actions > button + button {{ border-left: 1px solid {line}; }}
+.popup .actions > button.primary {{ color: {primary}; }}
+.popup .actions > button:hover {{ background-color: {chip}; }}
+"#,
+        line = theme.line.css(),
+        fg = theme.foreground.css(),
+        primary = theme.primary_action.css(),
+        chip = theme.chip.css(),
+    )
 }
 
 /// The "+N more" Overflow pill: a capsule in the card's colours, with
