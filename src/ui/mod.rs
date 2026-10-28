@@ -67,6 +67,15 @@ impl Ui {
         *self.look.borrow_mut() = look;
     }
 
+    /// Recolour with a new Theme: Popups on screen change at once (the
+    /// stylesheet has already switched; the cairo-drawn parts and the
+    /// shadow padding follow here).
+    pub fn set_theme(&self, theme: Theme) {
+        *self.theme.borrow_mut() = theme;
+        self.stack
+            .set_look(&self.look.borrow(), &self.theme.borrow());
+    }
+
     /// Apply one engine effect. Effects that aren't about Popups are
     /// ignored.
     pub fn apply(&self, effect: &Effect) {

@@ -67,7 +67,7 @@ fn the_defaults_are_the_spec_defaults() {
         c.look,
         LookConfig {
             accent: None,
-            opacity: 0.9,
+            opacity: 1.0,
             radius: 14,
             font: None,
             icon_size: 40,
@@ -129,7 +129,7 @@ critical = 0
 
 [look]
 accent = "#ff8a3d"
-opacity = 1
+opacity = 0.5
 radius = 0
 font = "Inter"
 icon_size = 32
@@ -165,7 +165,7 @@ allow_critical = false
         c.look,
         LookConfig {
             accent: Some("#ff8a3d".into()),
-            opacity: 1.0,
+            opacity: 0.5,
             radius: 0,
             font: Some("Inter".into()),
             icon_size: 32,

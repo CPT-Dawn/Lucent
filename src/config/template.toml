@@ -8,7 +8,9 @@
 # Delete this file to get a fresh copy on the next start.
 
 ## Look and feel: "auto" uses Dawn in dark mode and Daybreak in light mode.
-## Themes: auto, dawn, daybreak, graphite.
+## Themes: auto, dawn, daybreak, graphite (follows light/dark too).
+## For full control, put CSS in style.css next to this file: it is applied
+## on top of the Theme and reloads when you save it.
 # theme = "auto"
 
 # [popup]
@@ -32,10 +34,13 @@
 # critical = 0
 
 # [look]
-## Accent colour as hex, e.g. "#ff8a3d"; "" keeps the Theme's own.
+## Accent colour as hex, e.g. "#ff8a3d"; "" keeps the Theme's own
+## orange-to-violet (or grey) gradient. It also colours the first Action.
 # accent = ""
-## Background opacity, from 0.0 (invisible) to 1.0 (solid).
-# opacity = 0.9
+## Background opacity, from 0.0 (invisible) to 1.0. It scales the Theme's
+## own translucency (Dawn's glass is 76% opaque, so 0.5 makes it 38%);
+## text and borders stay crisp. Pair it with compositor blur.
+# opacity = 1.0
 ## Corner radius in pixels.
 # radius = 14
 ## Font family; "" uses your system UI font.

@@ -1,5 +1,6 @@
 //! Hot-reload: watches the config file and applies each valid save live.
-//! An invalid save keeps the last good config and logs what's wrong.
+//! An invalid save keeps the last good config and logs what's wrong. The
+//! user's `style.css` next to it is watched too, and restyles on its own.
 //!
 //! The watch is a GIO file monitor (inotify), so it costs nothing until
 //! the file changes. Editors often save in several steps (write a temp
@@ -22,7 +23,9 @@ const SETTLE: Duration = Duration::from_millis(150);
 pub struct LiveConfig {
     path: PathBuf,
     apply: Box<dyn Fn(&Config)>,
+    restyle: Option<Box<dyn Fn()>>,
     pending: RefCell<Option<SourceId>>,
+    pending_style: RefCell<Option<SourceId>>,
     monitor: RefCell<Option<gio::FileMonitor>>,
 }
 
@@ -44,7 +47,13 @@ impl LiveConfig {
                 Config::default()
             }
         };
-        (config, LiveConfigBuilder { path })
+        (
+            config,
+            LiveConfigBuilder {
+                path,
+                restyle: None,
+            },
+        )
     }
 
     /// Reload now. On success the new config is applied and its warnings
@@ -83,14 +92,23 @@ impl LiveConfig {
             }
         };
         let name = self.path.file_name().map(ToOwned::to_owned);
+        let style = Some(std::ffi::OsString::from(file::STYLE_CSS));
         let this = Rc::downgrade(self);
         monitor.connect_changed(move |_, file, other, _| {
-            let touches_config = [Some(file), other]
-                .into_iter()
-                .flatten()
-                .any(|f| f.basename().map(|b| b.into_os_string()) == name);
-            if let (true, Some(this)) = (touches_config, this.upgrade()) {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
+            let touches = |wanted: &Option<std::ffi::OsString>| {
+                [Some(file), other]
+                    .into_iter()
+                    .flatten()
+                    .any(|f| f.basename().map(|b| b.into_os_string()) == *wanted)
+            };
+            if touches(&name) {
                 this.reload_soon();
+            }
+            if touches(&style) {
+                this.restyle_soon();
             }
         });
         *self.monitor.borrow_mut() = Some(monitor);
@@ -98,32 +116,64 @@ impl LiveConfig {
 
     /// Reload once the file has been quiet for [`SETTLE`].
     fn reload_soon(self: &Rc<Self>) {
-        if let Some(source) = self.pending.borrow_mut().take() {
+        self.settle(
+            |this| &this.pending,
+            |this| {
+                let _ = this.reload();
+            },
+        );
+    }
+
+    /// Reapply `style.css` once it has been quiet for [`SETTLE`].
+    fn restyle_soon(self: &Rc<Self>) {
+        self.settle(
+            |this| &this.pending_style,
+            |this| {
+                if let Some(restyle) = &this.restyle {
+                    restyle();
+                }
+            },
+        );
+    }
+
+    /// Run `then` once nothing has called this for [`SETTLE`]; `pending`
+    /// picks the slot that remembers the waiting run.
+    fn settle(self: &Rc<Self>, pending: fn(&Self) -> &RefCell<Option<SourceId>>, then: fn(&Self)) {
+        if let Some(source) = pending(self).borrow_mut().take() {
             source.remove();
         }
         let this = Rc::downgrade(self);
         let source = glib::timeout_add_local_once(SETTLE, move || {
             if let Some(this) = this.upgrade() {
-                this.pending.borrow_mut().take();
-                let _ = this.reload();
+                pending(&this).borrow_mut().take();
+                then(&this);
             }
         });
-        *self.pending.borrow_mut() = Some(source);
+        *pending(self).borrow_mut() = Some(source);
     }
 }
 
 /// Finishes a [`LiveConfig`] once the daemon knows how to apply a config.
 pub struct LiveConfigBuilder {
     path: PathBuf,
+    restyle: Option<Box<dyn Fn()>>,
 }
 
 impl LiveConfigBuilder {
+    /// Run `restyle` whenever `style.css` in the config directory is saved.
+    pub fn on_style_change(mut self, restyle: impl Fn() + 'static) -> Self {
+        self.restyle = Some(Box::new(restyle));
+        self
+    }
+
     /// Start watching; `apply` runs with every valid reload.
     pub fn watch(self, apply: impl Fn(&Config) + 'static) -> Rc<LiveConfig> {
         let live = Rc::new(LiveConfig {
             path: self.path,
             apply: Box::new(apply),
+            restyle: self.restyle,
             pending: RefCell::default(),
+            pending_style: RefCell::default(),
             monitor: RefCell::default(),
         });
         live.watch();

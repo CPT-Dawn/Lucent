@@ -6,12 +6,27 @@
 //! the stylesheet, and the cairo-drawn parts (countdown line, and later the
 //! progress ring) read the same tokens, so the two never disagree.
 //!
-//! Only Dawn exists so far; Daybreak, Graphite and the `[look]` overrides
-//! add more values of these types without touching the widgets.
+//! [`Theme::for_config`] picks the Theme a config asks for, given whether
+//! the system prefers dark, and applies the `[look]` accent and opacity.
 
 use std::fmt::Write as _;
 
-use lucent::config::{Config, Position};
+use lucent::config::{self, Config, LookConfig, Position};
+
+/// The system's light/dark preference, as far as Lucent can tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemScheme {
+    Dark,
+    Light,
+    /// The desktop doesn't say (no settings portal, or no preference set).
+    NoPreference,
+}
+
+/// Whether to use the dark variant. Without a stated preference Lucent
+/// stays dark: Dawn is its home Theme.
+pub fn prefers_dark(scheme: SystemScheme) -> bool {
+    scheme != SystemScheme::Light
+}
 
 /// A colour with straight (not premultiplied) alpha.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -30,6 +45,26 @@ impl Rgba {
     /// An opaque colour from `0xRRGGBB`.
     pub const fn hex(rgb: u32) -> Self {
         Self::new((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, 1.0)
+    }
+
+    /// A colour from `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.
+    pub fn parse_hex(text: &str) -> Option<Self> {
+        let hex = text.strip_prefix('#')?;
+        let digit = |i: usize| u8::from_str_radix(hex.get(i..=i)?, 16).ok();
+        let pair = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+        let (r, g, b, a) = match hex.len() {
+            3 | 4 => {
+                let short = |i| digit(i).map(|d| d * 17);
+                let a = if hex.len() == 4 { short(3)? } else { 255 };
+                (short(0)?, short(1)?, short(2)?, a)
+            }
+            6 | 8 => {
+                let a = if hex.len() == 8 { pair(6)? } else { 255 };
+                (pair(0)?, pair(2)?, pair(4)?, a)
+            }
+            _ => return None,
+        };
+        Some(Self::new(r, g, b, f32::from(a) / 255.0))
     }
 
     pub fn with_alpha(self, a: f32) -> Self {
@@ -131,22 +166,95 @@ impl Theme {
             accent_1,
             accent_2: Rgba::hex(0xcf6bff),
             critical: Rgba::hex(0xff5d6c),
-            shadow: [
-                Shadow {
-                    y: 18,
-                    blur: 40,
-                    spread: -14,
-                    color: Rgba::new(8, 4, 20, 0.65),
-                },
-                Shadow {
-                    y: 2,
-                    blur: 8,
-                    spread: 0,
-                    color: Rgba::new(8, 4, 20, 0.3),
-                },
-            ],
+            shadow: shadows(-14, Rgba::new(8, 4, 20, 0.65), Rgba::new(8, 4, 20, 0.3)),
             primary_action: accent_1,
         }
+    }
+
+    /// Warm frosted light, Dawn's accent family in deeper tones.
+    pub fn daybreak() -> Self {
+        let accent_1 = Rgba::hex(0xee6b35);
+        Self {
+            name: "daybreak",
+            background: Rgba::new(255, 251, 247, 0.72),
+            foreground: Rgba::hex(0x2b2136),
+            muted: Rgba::new(43, 33, 54, 0.6),
+            line: Rgba::new(43, 33, 54, 0.09),
+            chip: Rgba::new(43, 33, 54, 0.06),
+            accent_1,
+            accent_2: Rgba::hex(0xa648de),
+            critical: Rgba::hex(0xe2364a),
+            shadow: shadows(
+                -16,
+                Rgba::new(110, 60, 50, 0.38),
+                Rgba::new(110, 60, 50, 0.12),
+            ),
+            primary_action: accent_1,
+        }
+    }
+
+    /// Neutral monochrome, dark variant.
+    pub fn graphite_dark() -> Self {
+        let foreground = Rgba::hex(0xededef);
+        Self {
+            name: "graphite-dark",
+            background: Rgba::new(26, 26, 29, 0.84),
+            foreground,
+            muted: Rgba::new(237, 237, 239, 0.55),
+            line: Rgba::new(255, 255, 255, 0.08),
+            chip: Rgba::new(255, 255, 255, 0.07),
+            accent_1: Rgba::hex(0xf4f4f5),
+            accent_2: Rgba::hex(0x8f8f99),
+            critical: Rgba::hex(0xf87171),
+            shadow: shadows(-14, Rgba::new(0, 0, 0, 0.7), Rgba::new(0, 0, 0, 0.3)),
+            primary_action: foreground,
+        }
+    }
+
+    /// Neutral monochrome, light variant.
+    pub fn graphite_light() -> Self {
+        let foreground = Rgba::hex(0x18181b);
+        Self {
+            name: "graphite-light",
+            background: Rgba::new(250, 250, 251, 0.84),
+            foreground,
+            muted: Rgba::new(24, 24, 27, 0.55),
+            line: Rgba::new(24, 24, 27, 0.08),
+            chip: Rgba::new(24, 24, 27, 0.06),
+            accent_1: Rgba::hex(0x27272a),
+            accent_2: Rgba::hex(0x8a8a94),
+            critical: Rgba::hex(0xdc2626),
+            shadow: shadows(-16, Rgba::new(0, 0, 0, 0.25), Rgba::new(0, 0, 0, 0.08)),
+            primary_action: foreground,
+        }
+    }
+
+    /// The Theme `config` asks for, in its light or dark variant, with the
+    /// `[look]` accent and opacity applied.
+    pub fn for_config(config: &Config, dark: bool) -> Self {
+        let theme = match (config.theme, dark) {
+            (config::Theme::Dawn, _) | (config::Theme::Auto, true) => Self::dawn(),
+            (config::Theme::Daybreak, _) | (config::Theme::Auto, false) => Self::daybreak(),
+            (config::Theme::Graphite, true) => Self::graphite_dark(),
+            (config::Theme::Graphite, false) => Self::graphite_light(),
+        };
+        theme.with_look(&config.look)
+    }
+
+    /// `opacity` scales the background's alpha (1.0 keeps the Theme's own
+    /// translucency); `accent` replaces both accents, and the primary
+    /// Action too where it follows the accent.
+    fn with_look(mut self, look: &LookConfig) -> Self {
+        let alpha = self.background.a * look.opacity as f32;
+        self.background = self.background.with_alpha(alpha);
+        if let Some(accent) = look.accent.as_deref().and_then(Rgba::parse_hex) {
+            if self.primary_action == self.accent_1 {
+                self.primary_action = accent;
+            }
+            self.accent_1 = accent;
+            self.accent_2 = accent;
+        }
+        self
     }
 
     /// How far the card's shadows (and the Critical glow) reach beyond it.
@@ -167,6 +275,24 @@ impl Theme {
         }
         reach
     }
+}
+
+/// The prototype's two-layer card shadow: a wide soft drop and a close one.
+fn shadows(spread: i32, far: Rgba, near: Rgba) -> [Shadow; 2] {
+    [
+        Shadow {
+            y: 18,
+            blur: 40,
+            spread,
+            color: far,
+        },
+        Shadow {
+            y: 2,
+            blur: 8,
+            spread: 0,
+            color: near,
+        },
+    ]
 }
 
 /// Spread of the Critical pulse's glow ring, in pixels.
@@ -390,5 +516,145 @@ mod tests {
         let look = Look::default();
         assert_eq!(look.tile_radius(), 12.0);
         assert_eq!(look.badge(), 20);
+    }
+
+    // ── Choosing a Theme ──
+
+    fn chosen(theme: &str, dark: bool) -> Theme {
+        let config = lucent::config::parse(&format!("theme = \"{theme}\""))
+            .expect("valid config")
+            .config;
+        Theme::for_config(&config, dark)
+    }
+
+    #[test]
+    fn auto_is_dawn_in_the_dark_and_daybreak_in_the_light() {
+        assert_eq!(chosen("auto", true).name, "dawn");
+        assert_eq!(chosen("auto", false).name, "daybreak");
+    }
+
+    #[test]
+    fn graphite_follows_the_system_but_dawn_and_daybreak_are_fixed() {
+        assert_eq!(chosen("graphite", true).name, "graphite-dark");
+        assert_eq!(chosen("graphite", false).name, "graphite-light");
+        assert_eq!(chosen("dawn", false).name, "dawn");
+        assert_eq!(chosen("daybreak", true).name, "daybreak");
+    }
+
+    #[test]
+    fn daybreak_matches_the_prototype_tokens() {
+        let t = chosen("daybreak", false);
+        assert_eq!(t.background.css(), "rgba(255,251,247,0.72)");
+        assert_eq!(t.foreground.css(), "rgba(43,33,54,1)");
+        assert_eq!(t.muted.css(), "rgba(43,33,54,0.6)");
+        assert_eq!(t.line.css(), "rgba(43,33,54,0.09)");
+        assert_eq!(t.chip.css(), "rgba(43,33,54,0.06)");
+        assert_eq!(t.accent_1.css(), "rgba(238,107,53,1)");
+        assert_eq!(t.accent_2.css(), "rgba(166,72,222,1)");
+        assert_eq!(t.critical.css(), "rgba(226,54,74,1)");
+        assert!(css(&t, &Look::default()).contains(
+            "box-shadow: 0 18px 40px -16px rgba(110,60,50,0.38), 0 2px 8px 0px rgba(110,60,50,0.12);"
+        ));
+    }
+
+    #[test]
+    fn graphite_matches_the_prototype_tokens_in_both_variants() {
+        let dark = chosen("graphite", true);
+        assert_eq!(dark.background.css(), "rgba(26,26,29,0.84)");
+        assert_eq!(dark.foreground.css(), "rgba(237,237,239,1)");
+        assert_eq!(dark.muted.css(), "rgba(237,237,239,0.55)");
+        assert_eq!(dark.line.css(), "rgba(255,255,255,0.08)");
+        assert_eq!(dark.chip.css(), "rgba(255,255,255,0.07)");
+        assert_eq!(dark.accent_1.css(), "rgba(244,244,245,1)");
+        assert_eq!(dark.accent_2.css(), "rgba(143,143,153,1)");
+        assert_eq!(dark.critical.css(), "rgba(248,113,113,1)");
+        let light = chosen("graphite", false);
+        assert_eq!(light.background.css(), "rgba(250,250,251,0.84)");
+        assert_eq!(light.foreground.css(), "rgba(24,24,27,1)");
+        assert_eq!(light.muted.css(), "rgba(24,24,27,0.55)");
+        assert_eq!(light.line.css(), "rgba(24,24,27,0.08)");
+        assert_eq!(light.chip.css(), "rgba(24,24,27,0.06)");
+        assert_eq!(light.accent_1.css(), "rgba(39,39,42,1)");
+        assert_eq!(light.accent_2.css(), "rgba(138,138,148,1)");
+        assert_eq!(light.critical.css(), "rgba(220,38,38,1)");
+        assert!(css(&light, &Look::default()).contains(
+            "box-shadow: 0 18px 40px -16px rgba(0,0,0,0.25), 0 2px 8px 0px rgba(0,0,0,0.08);"
+        ));
+    }
+
+    #[test]
+    fn graphites_primary_action_uses_the_foreground() {
+        let graphite = chosen("graphite", true);
+        assert_eq!(graphite.primary_action, graphite.foreground);
+        let dawn = chosen("dawn", true);
+        assert_eq!(dawn.primary_action, dawn.accent_1);
+    }
+
+    // ── [look] on top of the Theme ──
+
+    fn with_look(look: &str) -> Theme {
+        let config = lucent::config::parse(&format!("theme = \"dawn\"\n[look]\n{look}"))
+            .expect("valid config")
+            .config;
+        Theme::for_config(&config, true)
+    }
+
+    #[test]
+    fn by_default_each_theme_keeps_its_own_background_alpha() {
+        assert_eq!(with_look(""), Theme::dawn());
+    }
+
+    #[test]
+    fn opacity_scales_the_themes_background_alpha() {
+        assert_eq!(
+            with_look("opacity = 0.5").background.css(),
+            "rgba(22,17,34,0.38)"
+        );
+        assert_eq!(with_look("opacity = 0").background.a, 0.0);
+    }
+
+    #[test]
+    fn opacity_leaves_text_and_lines_alone() {
+        let faded = with_look("opacity = 0.5");
+        assert_eq!(faded.foreground, Theme::dawn().foreground);
+        assert_eq!(faded.line, Theme::dawn().line);
+    }
+
+    #[test]
+    fn an_accent_replaces_both_accent_tokens_and_the_primary_action() {
+        let t = with_look("accent = \"#3d8aff\"");
+        assert_eq!(t.accent_1.css(), "rgba(61,138,255,1)");
+        assert_eq!(t.accent_2, t.accent_1);
+        assert_eq!(t.primary_action, t.accent_1);
+        assert!(css(&t, &Look::default()).contains("link { color: rgba(61,138,255,1); }"));
+    }
+
+    #[test]
+    fn short_and_translucent_accents_are_understood() {
+        assert_eq!(
+            with_look("accent = \"#f80\"").accent_1.css(),
+            "rgba(255,136,0,1)"
+        );
+        assert_eq!(
+            with_look("accent = \"#ff880080\"").accent_1.css(),
+            "rgba(255,136,0,0.5019608)"
+        );
+    }
+
+    #[test]
+    fn graphite_keeps_its_foreground_primary_action_under_an_accent() {
+        let config = lucent::config::parse("theme = \"graphite\"\n[look]\naccent = \"#3d8aff\"")
+            .expect("valid config")
+            .config;
+        let t = Theme::for_config(&config, true);
+        assert_eq!(t.accent_1.css(), "rgba(61,138,255,1)");
+        assert_eq!(t.primary_action, t.foreground);
+    }
+
+    #[test]
+    fn the_system_prefers_dark_unless_it_says_light() {
+        assert!(prefers_dark(SystemScheme::Dark));
+        assert!(!prefers_dark(SystemScheme::Light));
+        assert!(prefers_dark(SystemScheme::NoPreference));
     }
 }
