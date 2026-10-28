@@ -9,6 +9,7 @@ use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
 use super::{Config, Diagnostic, Position, Theme};
+use crate::engine::{Pattern, Rule, RuleTimeout, Urgency};
 
 /// A config that parsed, with the warnings worth showing the user.
 #[derive(Debug, Clone, PartialEq)]
@@ -97,6 +98,18 @@ const LOOK_KEYS: &[&str] = &[
 ];
 const HISTORY_KEYS: &[&str] = &["limit"];
 const DND_KEYS: &[&str] = &["allow_critical"];
+const RULE_KEYS: &[&str] = &["app", "summary", "timeout", "urgency", "hide", "history"];
+const URGENCY_NAMES: [&str; 3] = ["low", "normal", "critical"];
+const RULE_HELP: &str = "start each Rule with a `[[rule]]` line and put its keys below it";
+
+fn urgency_from_name(name: &str) -> Option<Urgency> {
+    Some(match name {
+        "low" => Urgency::Low,
+        "normal" => Urgency::Normal,
+        "critical" => Urgency::Critical,
+        _ => return None,
+    })
+}
 
 /// v1 keys and where their job went in v2.
 const V1_KEYS: &[(&str, &str)] = &[
@@ -143,8 +156,7 @@ impl Parser<'_> {
                 "look" => self.section(key, value, |p, k, v| p.look(k, v)),
                 "history" => self.section(key, value, |p, k, v| p.history(k, v)),
                 "dnd" => self.section(key, value, |p, k, v| p.dnd(k, v)),
-                // `[[rule]]` is parsed by ticket #11 (Per-app Rules).
-                "rule" => {}
+                "rule" => self.rules(value),
                 name => match V1_KEYS.iter().find(|(v1, _)| *v1 == name) {
                     Some((_, replacement)) => self.warn(
                         key.span().start,
@@ -317,6 +329,116 @@ impl Parser<'_> {
         }
     }
 
+    /// `[[rule]]`: an array of tables, kept in file order.
+    fn rules(&mut self, value: &Value<'_>) {
+        let entries: &[Value<'_>] = match value.get_ref() {
+            DeValue::Array(entries) => entries,
+            DeValue::Table(_) => {
+                return self.error(
+                    value,
+                    "a Rule needs double brackets: `[[rule]]`, not `[rule]`".into(),
+                    "start each Rule with its own `[[rule]]` line, so you can have as many \
+                     as you like"
+                        .into(),
+                );
+            }
+            other => {
+                return self.error(
+                    value,
+                    format!(
+                        "`rule` must be a list of Rules, but this is {}",
+                        kind(other)
+                    ),
+                    RULE_HELP.into(),
+                );
+            }
+        };
+        for entry in entries {
+            match entry.get_ref() {
+                DeValue::Table(table) => {
+                    if let Some(rule) = self.rule(entry, table) {
+                        self.config.rules.0.push(rule);
+                    }
+                }
+                other => self.error(
+                    entry,
+                    format!("each Rule must be a section, but this is {}", kind(other)),
+                    RULE_HELP.into(),
+                ),
+            }
+        }
+    }
+
+    /// One Rule, or `None` if it has errors.
+    fn rule(&mut self, entry: &Value<'_>, table: &DeTable<'_>) -> Option<Rule> {
+        let errors_before = self.errors.len();
+        let mut rule = Rule::default();
+        let (mut matches, mut changes) = (false, false);
+        for (key, value) in table {
+            match key.get_ref().as_ref() {
+                "app" => {
+                    matches = true;
+                    rule.app = self
+                        .string("app", value, "\"discord\"")
+                        .map(|app| Pattern::new(&app));
+                }
+                "summary" => {
+                    matches = true;
+                    rule.summary = self
+                        .string("summary", value, "\"*is typing*\"")
+                        .map(|summary| Pattern::new(&summary));
+                }
+                "timeout" => {
+                    changes = true;
+                    let example = "e.g. `timeout = 2`, or `timeout = 0` to stay until dismissed";
+                    if let Some(seconds) =
+                        self.number_like("timeout", value, 0.0..=MAX_TIMEOUT, "seconds", example)
+                    {
+                        rule.timeout = Some(if seconds > 0.0 {
+                            RuleTimeout::After(Duration::from_secs_f64(seconds))
+                        } else {
+                            RuleTimeout::Never
+                        });
+                    }
+                }
+                "urgency" => {
+                    changes = true;
+                    rule.urgency =
+                        self.choice("rule.urgency", value, &URGENCY_NAMES, urgency_from_name);
+                }
+                "hide" => {
+                    changes = true;
+                    rule.hide = self.boolean("hide", value).unwrap_or_default();
+                }
+                "history" => {
+                    changes = true;
+                    rule.history = self.boolean("history", value).unwrap_or(true);
+                }
+                _ => self.unknown("[rule]", key, RULE_KEYS),
+            }
+        }
+        if !matches {
+            self.error(
+                entry,
+                "this Rule matches nothing: it has no `app` or `summary`".into(),
+                "add `app = \"discord\"` and/or `summary = \"*is typing*\"`; \
+                 `app = \"*\"` matches every app"
+                    .into(),
+            );
+        } else if !changes {
+            self.warn(
+                entry.span().start,
+                "this Rule changes nothing".into(),
+                Some(
+                    "add `timeout`, `urgency`, `hide = true` or `history = false` below its \
+                     `app`/`summary`"
+                        .into(),
+                ),
+            );
+        }
+        (self.errors.len() == errors_before).then_some(rule)
+    }
+
     // ── Value readers: each reports its own error and returns `None` ──
 
     fn pixels(
@@ -379,6 +501,19 @@ impl Parser<'_> {
         unit: &str,
     ) -> Option<f64> {
         let example = format!("e.g. `{name} = {default}` (the default)");
+        self.number_like(name, value, range, unit, &example)
+    }
+
+    /// [`Self::number`] for keys without a default, with the example to
+    /// show in the fix (`e.g. ...`).
+    fn number_like(
+        &mut self,
+        name: &str,
+        value: &Value<'_>,
+        range: RangeInclusive<f64>,
+        unit: &str,
+        example: &str,
+    ) -> Option<f64> {
         let unit_suffix = if unit.is_empty() {
             String::new()
         } else {
