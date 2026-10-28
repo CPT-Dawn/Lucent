@@ -4,6 +4,7 @@
 
 pub mod control;
 pub mod hints;
+pub mod owner;
 
 use std::collections::HashMap;
 
@@ -177,14 +178,42 @@ pub async fn run_server(
     Ok(())
 }
 
-/// The unique bus name currently owning `org.freedesktop.Notifications`.
-pub async fn notifications_name_owner() -> zbus::Result<Option<String>> {
-    let conn = zbus::Connection::session().await?;
-    let proxy = DBusProxy::new(&conn).await?;
+/// Whoever currently owns `org.freedesktop.Notifications`, as far as it
+/// can be identified, or `None` if nobody does.
+pub async fn notifications_owner(conn: &zbus::Connection) -> zbus::Result<Option<owner::Owner>> {
+    let dbus = DBusProxy::new(conn).await?;
     let name = BusName::try_from(NOTIFICATIONS_NAME)?;
-    if proxy.name_has_owner(name.clone()).await? {
-        Ok(Some(proxy.get_name_owner(name).await?.to_string()))
-    } else {
-        Ok(None)
+    if !dbus.name_has_owner(name.clone()).await? {
+        return Ok(None);
     }
+    let unique = BusName::from(dbus.get_name_owner(name).await?.into_inner());
+    let pid = dbus
+        .get_connection_unix_process_id(unique.clone())
+        .await
+        .ok();
+    let proc_file = |file: &str| {
+        pid.and_then(|pid| std::fs::read_to_string(format!("/proc/{pid}/{file}")).ok())
+    };
+    Ok(Some(owner::Owner {
+        server_name: server_name(conn, unique).await,
+        process: proc_file("comm")
+            .map(|comm| comm.trim().to_owned())
+            .filter(|comm| !comm.is_empty()),
+        pid,
+        unit: proc_file("cgroup").and_then(|cgroup| owner::systemd_unit(&cgroup)),
+    }))
+}
+
+/// The name a notification server gives in `GetServerInformation`. A
+/// daemon that doesn't answer promptly stays anonymous.
+async fn server_name(conn: &zbus::Connection, server: BusName<'_>) -> Option<String> {
+    let proxy = zbus::Proxy::new(conn, server, NOTIFICATIONS_PATH, NOTIFICATIONS_NAME)
+        .await
+        .ok()?;
+    let call = proxy.call::<_, _, (String, String, String, String)>("GetServerInformation", &());
+    let (name, ..) = tokio::time::timeout(std::time::Duration::from_millis(500), call)
+        .await
+        .ok()?
+        .ok()?;
+    Some(name).filter(|name| !name.is_empty())
 }

@@ -26,12 +26,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let owner = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(dbus::notifications_name_owner())?;
+        .block_on(async {
+            let conn = zbus::Connection::session().await?;
+            dbus::notifications_owner(&conn).await
+        })?;
     if let Some(owner) = owner {
-        tracing::warn!(
-            "another notification daemon ({owner}) owns org.freedesktop.Notifications; \
-             stop it to run Lucent"
-        );
+        // Not an error: someone is showing Notifications, just not us.
+        eprintln!("{}", dbus::owner::standing_aside(&owner).trim_end());
         return Ok(());
     }
 
