@@ -1,7 +1,14 @@
 //! GTK adapter: draws the Popups the engine asks for and turns clicks into
 //! engine events. All state lives on the GTK main thread.
 
+pub mod ago;
+pub mod countdown;
+pub mod icon;
+pub mod layout;
+pub mod markup;
+pub mod motion;
 pub mod style;
+pub mod theme;
 pub mod window;
 
 use std::cell::RefCell;
