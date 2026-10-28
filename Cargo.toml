@@ -1,11 +1,11 @@
 [package]
 name = "lucent"
-version = "1.1.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.92"
 authors = ["Swastik Patel"]
 license = "MIT"
-description = "A blazing-fast, visually stunning Wayland notification daemon"
+description = "A fast, gorgeous notification daemon for Wayland: Notifications that don't nag, they glow"
 repository = "https://github.com/CPT-Dawn/Lucent"
 keywords = ["wayland", "notification", "daemon", "hyprland", "dbus"]
 categories = ["gui", "system-tools"]
