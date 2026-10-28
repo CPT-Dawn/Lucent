@@ -4,11 +4,15 @@
 //! To add a subcommand: add a variant to [`Command`] (its doc comment is
 //! the `--help` text), give it a module with a `run` function returning an
 //! [`ExitCode`], and dispatch to it in [`Command::run`]. Subcommands that
-//! talk to the daemon go through [`daemon::connect`].
+//! talk to the daemon go through [`daemon::with_daemon`].
 
 mod check;
+mod clear;
 mod daemon;
+mod dismiss;
+mod history;
 mod reload;
+mod restore;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -40,6 +44,26 @@ pub enum Command {
     /// Lucent already reloads whenever the config is saved; this is the
     /// manual fallback. An invalid config keeps the previous one.
     Reload,
+    /// Dismiss the newest Popup.
+    Dismiss {
+        /// Dismiss every Popup, and everything waiting in Overflow.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show a History entry again as a new Popup.
+    Restore {
+        /// The entry's id, as `lucent history` lists it (default: the most
+        /// recent entry).
+        id: Option<u32>,
+    },
+    /// List History, newest first.
+    History {
+        /// Print JSON for scripts instead of a readable list.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Empty History.
+    Clear,
 }
 
 impl Command {
@@ -47,6 +71,10 @@ impl Command {
         match self {
             Self::Check { path } => check::run(path),
             Self::Reload => reload::run(),
+            Self::Dismiss { all } => dismiss::run(all),
+            Self::Restore { id } => restore::run(id),
+            Self::History { json } => history::run(json),
+            Self::Clear => clear::run(),
         }
     }
 }

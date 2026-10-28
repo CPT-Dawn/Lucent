@@ -27,7 +27,7 @@ struct NotificationServer {
 #[interface(name = "org.freedesktop.Notifications")]
 impl NotificationServer {
     async fn get_capabilities(&self) -> Vec<String> {
-        vec!["body".into(), "body-markup".into()]
+        vec!["body".into(), "body-markup".into(), "persistence".into()]
     }
 
     #[allow(clippy::too_many_arguments)] // Signature mandated by the spec.

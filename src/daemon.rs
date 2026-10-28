@@ -18,6 +18,7 @@ use lucent::engine::{Effect, Engine, Event, IdAllocator, SystemClock};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::dbus::control::Request;
+use crate::engine_host::Core;
 use crate::live_config::LiveConfig;
 use crate::{dbus, timers, ui};
 
@@ -75,9 +76,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             })?;
     }
 
-    let mut engine = Engine::new(config.engine_config(), Box::new(SystemClock));
+    let engine = Engine::new(config.engine_config(), Box::new(SystemClock)).with_ids(ids);
     let ui = Rc::new(ui::Ui::new(Rc::new(config), events_tx.clone()));
     let timers = timers::Timers::new(events_tx.clone());
+    let core = Rc::new(Core::new(engine, ui.clone(), timers, signals_tx));
     let main_loop = glib::MainLoop::new(None, false);
 
     let live_config = {
@@ -89,17 +91,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
-    glib::spawn_future_local(async move {
-        while let Some(event) = events_rx.recv().await {
-            for effect in engine.handle(event) {
-                ui.apply(&effect);
-                timers.apply(&effect);
-                if dbus::handles(&effect) {
-                    let _ = signals_tx.send(effect);
-                }
+    {
+        let core = core.clone();
+        glib::spawn_future_local(async move {
+            while let Some(event) = events_rx.recv().await {
+                core.handle(event);
             }
-        }
-    });
+        });
+    }
 
     glib::spawn_future_local(async move {
         while let Some(request) = requests_rx.recv().await {
@@ -107,6 +106,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Request::ReloadConfig(reply) => {
                     let _ = reply.send(live_config.reload());
                 }
+                Request::Engine(command) => core.answer(command),
             }
         }
     });
