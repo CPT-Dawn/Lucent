@@ -13,6 +13,7 @@
 //! | `icon`      | what goes in the icon tile (pure)                     |
 //! | `markup`    | body markup checking (pure)                           |
 //! | `countdown` | the countdown line's state (pure)                     |
+//! | `progress`  | the progress ring and header percentage (pure)       |
 //! | `ago`       | the relative time text (pure)                         |
 
 pub mod ago;
@@ -22,6 +23,7 @@ pub mod icon;
 pub mod layout;
 pub mod markup;
 pub mod motion;
+pub mod progress;
 pub mod stack;
 pub mod style;
 pub mod theme;

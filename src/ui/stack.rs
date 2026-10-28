@@ -315,7 +315,7 @@ impl Inner {
 }
 
 /// Whether the desktop asks for less motion.
-fn reduced_motion() -> bool {
+pub(super) fn reduced_motion() -> bool {
     gtk4::Settings::default().is_some_and(|settings| {
         !settings.is_gtk_enable_animations()
             || settings.gtk_interface_reduced_motion() == gtk4::ReducedMotion::Reduce
