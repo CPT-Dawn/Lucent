@@ -14,12 +14,18 @@ pub enum Event {
     NotificationReceived(Notification),
     /// The app closed a Notification (`CloseNotification`).
     AppClosed(NotificationId),
-    /// The user dismissed one Popup (click, close button, CLI).
+    /// The user dismissed one Popup (close button, CLI).
     UserDismissed(NotificationId),
-    /// The user dismissed every Popup (middle-click, `lucent dismiss --all`).
+    /// The user dismissed every Popup (`lucent dismiss --all`).
     UserDismissedAll,
-    /// The user invoked an Action on a Popup (`"default"` for a body click).
+    /// The user invoked an Action on a Popup (an Action button).
     ActionInvoked { id: NotificationId, key: String },
+    /// The user clicked a Popup's body. The engine decides what that
+    /// means: see [`MouseButton`].
+    PopupClicked {
+        id: NotificationId,
+        button: MouseButton,
+    },
     /// A timer the engine scheduled has fired.
     TimerFired(Timer),
     /// The pointer entered a Popup.
@@ -36,6 +42,17 @@ pub enum Event {
     OverflowAdvanced,
     /// A new config was loaded.
     ConfigReplaced(EngineConfig),
+}
+
+/// Which mouse button clicked a Popup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    /// Invokes the default Action, or dismisses when there is none.
+    Primary,
+    /// Dismisses every Popup.
+    Middle,
+    /// Dismisses this Popup.
+    Secondary,
 }
 
 /// How a Do Not Disturb request changes the current state.

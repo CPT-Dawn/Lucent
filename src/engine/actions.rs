@@ -1,6 +1,6 @@
 //! Actions and click semantics.
 
-use super::{CloseReason, Effect, Engine, NotificationId};
+use super::{CloseReason, Effect, Engine, MouseButton, NotificationId};
 
 impl Engine {
     /// The user invoked an Action on a Popup: tell the app, then close the
@@ -17,12 +17,39 @@ impl Engine {
         out.push(Effect::ActionInvoked { id, key });
         self.close(id, CloseReason::Dismissed, out);
     }
+
+    /// The user clicked a Popup's body: left invokes the default Action
+    /// (or dismisses when there is none), middle dismisses every Popup,
+    /// right dismisses this one. Clicks on a Popup that is already gone
+    /// do nothing.
+    pub(super) fn popup_clicked(
+        &mut self,
+        id: NotificationId,
+        button: MouseButton,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(notification) = self.stack.visible(id) else {
+            return;
+        };
+        match button {
+            MouseButton::Primary if notification.actions.iter().any(|a| a.key == DEFAULT) => {
+                self.invoke_action(id, DEFAULT.into(), out)
+            }
+            MouseButton::Primary | MouseButton::Secondary => {
+                self.close(id, CloseReason::Dismissed, out)
+            }
+            MouseButton::Middle => self.dismiss_all(out),
+        }
+    }
 }
+
+/// The Action a body click invokes.
+const DEFAULT: &str = "default";
 
 #[cfg(test)]
 mod tests {
     use crate::engine::testing::*;
-    use crate::engine::{CloseReason, Effect, Event, NotificationId};
+    use crate::engine::{CloseReason, Effect, Event, MouseButton, NotificationId};
 
     fn invoke(id: NotificationId, key: &str) -> Event {
         Event::ActionInvoked {
@@ -69,23 +96,43 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn a_body_click_invokes_the_default_action() {
-        let mut h = Harness::new();
-        h.notify(notification(1).action("default", "Open"));
+    fn click(id: NotificationId, button: MouseButton) -> Event {
+        Event::PopupClicked { id, button }
+    }
 
-        let effects = h.send(invoke(1, "default"));
+    #[test]
+    fn a_left_click_invokes_the_default_action_then_closes_the_popup() {
+        let mut h = Harness::new();
+        h.notify(
+            notification(1)
+                .action("reply", "Reply")
+                .action("default", "Open"),
+        );
+
+        let effects = h.send(click(1, MouseButton::Primary));
 
         assert_eq!(action_invoked(&effects), [(1, "default".to_string())]);
         assert_eq!(closed(&effects), [(1, CloseReason::Dismissed)]);
     }
 
     #[test]
-    fn a_body_click_without_a_default_action_and_a_right_click_only_dismiss() {
+    fn a_left_click_without_a_default_action_only_dismisses() {
         let mut h = Harness::new();
         h.notify(notification(1).action("reply", "Reply"));
 
-        let effects = h.send(Event::UserDismissed(1));
+        let effects = h.send(click(1, MouseButton::Primary));
+
+        assert!(action_invoked(&effects).is_empty(), "{effects:?}");
+        assert_eq!(closed(&effects), [(1, CloseReason::Dismissed)]);
+    }
+
+    #[test]
+    fn a_right_click_dismisses_without_invoking_the_default_action() {
+        let mut h = Harness::new();
+        h.notify(notification(1).action("default", "Open"));
+        h.notify(notification(2));
+
+        let effects = h.send(click(1, MouseButton::Secondary));
 
         assert!(action_invoked(&effects).is_empty(), "{effects:?}");
         assert_eq!(closed(&effects), [(1, CloseReason::Dismissed)]);
@@ -97,7 +144,7 @@ mod tests {
         h.notify(notification(1).action("default", "Open"));
         h.notify(notification(2).action("reply", "Reply"));
 
-        let effects = h.send(Event::UserDismissedAll);
+        let effects = h.send(click(2, MouseButton::Middle));
 
         assert!(action_invoked(&effects).is_empty(), "{effects:?}");
         let mut closed = closed(&effects);
@@ -106,6 +153,23 @@ mod tests {
             closed,
             [(1, CloseReason::Dismissed), (2, CloseReason::Dismissed)]
         );
+    }
+
+    #[test]
+    fn a_click_on_a_popup_that_is_already_gone_does_nothing() {
+        let mut h = Harness::new();
+        h.notify(notification(1).action("default", "Open"));
+        h.notify(notification(2));
+        h.send(Event::UserDismissed(1));
+
+        for button in [
+            MouseButton::Primary,
+            MouseButton::Middle,
+            MouseButton::Secondary,
+        ] {
+            assert!(h.send(click(1, button)).is_empty(), "{button:?}");
+            assert!(h.send(click(42, button)).is_empty(), "{button:?}");
+        }
     }
 
     #[test]

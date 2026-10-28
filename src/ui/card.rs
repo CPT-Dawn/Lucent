@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use gtk4::prelude::*;
 use gtk4::{Align, Box as GtkBox, DrawingArea, Label, Orientation, Overlay, gdk, gio, glib, pango};
-use lucent::engine::{Action, Event, Notification, NotificationId, Popup, Urgency};
+use lucent::engine::{Action, Event, MouseButton, Notification, NotificationId, Popup, Urgency};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::ago::{ago, until_change};
@@ -49,7 +49,6 @@ pub struct Card {
 
 /// What the card's signal handlers need.
 struct Shared {
-    notification: RefCell<Notification>,
     countdown: RefCell<Option<Countdown>>,
     ticking: Cell<bool>,
     line: DrawingArea,
@@ -97,7 +96,6 @@ impl Card {
         root.add_overlay(&line);
 
         let shared = Rc::new(Shared {
-            notification: RefCell::new(popup.notification.clone()),
             countdown: RefCell::new(None),
             ticking: Cell::new(false),
             line,
@@ -161,18 +159,13 @@ impl Card {
         click.set_button(0);
         {
             let events = events.clone();
-            let shared = Rc::downgrade(&shared);
             click.connect_released(move |gesture, _, x, y| {
-                let Some(shared) = shared.upgrade() else {
-                    return;
-                };
-                if gesture.current_button() == gdk::BUTTON_PRIMARY && on_button(gesture, x, y) {
+                let button = gesture.current_button();
+                if button == gdk::BUTTON_PRIMARY && on_button(gesture, x, y) {
                     return;
                 }
-                if let Some(event) =
-                    click_event(gesture.current_button(), &shared.notification.borrow())
-                {
-                    send(&events, event);
+                if let Some(button) = mouse_button(button) {
+                    send(&events, Event::PopupClicked { id, button });
                 }
             });
         }
@@ -200,7 +193,6 @@ impl Card {
 
     /// Show a replaced Notification in place; its countdown starts over.
     pub fn update(&self, popup: &Popup) {
-        *self.shared.notification.borrow_mut() = popup.notification.clone();
         self.fill(popup);
     }
 
@@ -274,22 +266,13 @@ impl Card {
     }
 }
 
-/// What a click on the card means: left invokes the default Action (or
-/// dismisses when there is none), middle dismisses every Popup, right
-/// dismisses this one.
-pub fn click_event(button: u32, notification: &Notification) -> Option<Event> {
-    let id = notification.id;
+/// The engine's name for a GDK mouse button; the engine decides what a
+/// click means. Other buttons (back, forward) do nothing.
+fn mouse_button(button: u32) -> Option<MouseButton> {
     match button {
-        gdk::BUTTON_PRIMARY => Some(if notification.actions.iter().any(|a| a.key == "default") {
-            Event::ActionInvoked {
-                id,
-                key: "default".into(),
-            }
-        } else {
-            Event::UserDismissed(id)
-        }),
-        gdk::BUTTON_MIDDLE => Some(Event::UserDismissedAll),
-        gdk::BUTTON_SECONDARY => Some(Event::UserDismissed(id)),
+        gdk::BUTTON_PRIMARY => Some(MouseButton::Primary),
+        gdk::BUTTON_MIDDLE => Some(MouseButton::Middle),
+        gdk::BUTTON_SECONDARY => Some(MouseButton::Secondary),
         _ => None,
     }
 }
@@ -775,37 +758,10 @@ mod tests {
     }
 
     #[test]
-    fn left_click_invokes_the_default_action_when_there_is_one() {
-        assert_eq!(
-            click_event(1, &notification(&["reply", "default"])),
-            Some(Event::ActionInvoked {
-                id: 7,
-                key: "default".into()
-            })
-        );
-    }
-
-    #[test]
-    fn left_click_without_a_default_action_dismisses() {
-        assert_eq!(
-            click_event(1, &notification(&["reply"])),
-            Some(Event::UserDismissed(7))
-        );
-    }
-
-    #[test]
     fn every_action_but_default_gets_a_button_in_the_apps_order() {
         let n = notification(&["reply", "default", "read"]);
         let keys: Vec<_> = buttons(&n).iter().map(|a| a.key.as_str()).collect();
         assert_eq!(keys, ["reply", "read"]);
         assert!(buttons(&notification(&["default"])).is_empty());
-    }
-
-    #[test]
-    fn right_click_dismisses_and_middle_click_dismisses_all() {
-        let n = notification(&["default"]);
-        assert_eq!(click_event(3, &n), Some(Event::UserDismissed(7)));
-        assert_eq!(click_event(2, &n), Some(Event::UserDismissedAll));
-        assert_eq!(click_event(8, &n), None);
     }
 }

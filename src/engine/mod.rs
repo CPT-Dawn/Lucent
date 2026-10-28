@@ -48,7 +48,7 @@ pub use clock::{Clock, SystemClock};
 pub use config::{EngineConfig, Timeouts};
 pub use dnd::DndConfig;
 pub use effect::{CloseReason, Effect, Popup, Status, Timer};
-pub use event::{DndChange, Event};
+pub use event::{DndChange, Event, MouseButton};
 pub use history::{HistoryConfig, HistoryEntry};
 pub use ids::IdAllocator;
 pub use notification::{
@@ -97,6 +97,7 @@ impl Engine {
             Event::UserDismissed(id) => self.close(id, CloseReason::Dismissed, &mut out),
             Event::UserDismissedAll => self.dismiss_all(&mut out),
             Event::ActionInvoked { id, key } => self.invoke_action(id, key, &mut out),
+            Event::PopupClicked { id, button } => self.popup_clicked(id, button, &mut out),
             Event::TimerFired(timer) => self.timer_fired(timer, &mut out),
             Event::HoverStarted(id) => self.hover_started(id, &mut out),
             Event::HoverEnded(id) => self.hover_ended(id, &mut out),
