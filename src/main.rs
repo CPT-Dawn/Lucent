@@ -5,6 +5,7 @@
 mod cli;
 mod daemon;
 mod dbus;
+mod engine_host;
 mod live_config;
 mod timers;
 mod ui;

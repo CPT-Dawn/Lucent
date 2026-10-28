@@ -16,8 +16,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use super::{
-    Action, Clock, CloseReason, Effect, Engine, EngineConfig, Event, Expiry, Image, Notification,
-    NotificationId, Timer, Urgency,
+    Action, Clock, CloseReason, Effect, Engine, EngineConfig, Event, Expiry, IdAllocator, Image,
+    Notification, NotificationId, Timer, Urgency,
 };
 
 /// A clock that only moves when told to. Clones share the same time.
@@ -154,7 +154,10 @@ impl Harness {
     pub fn with_config(config: EngineConfig) -> Self {
         let clock = FakeClock::new();
         Self {
-            engine: Engine::new(config, Box::new(clock.clone())),
+            // Ids the engine allocates itself (restored History entries)
+            // start high so they never collide with the ids tests pick.
+            engine: Engine::new(config, Box::new(clock.clone()))
+                .with_ids(IdAllocator::starting_at(10_000)),
             clock,
             timers: HashMap::new(),
         }
@@ -265,6 +268,14 @@ pub fn closed(effects: &[Effect]) -> Vec<(NotificationId, CloseReason)> {
             _ => None,
         })
         .collect()
+}
+
+/// The last History count reported in a status change, if any.
+pub fn history_count(effects: &[Effect]) -> Option<usize> {
+    effects.iter().rev().find_map(|e| match e {
+        Effect::StatusChanged(status) => Some(status.history_count),
+        _ => None,
+    })
 }
 
 /// The last Overflow count reported, if any.

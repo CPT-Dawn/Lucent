@@ -26,12 +26,18 @@ struct NotificationServer {
 
 #[interface(name = "org.freedesktop.Notifications")]
 impl NotificationServer {
-    /// Only what Popups actually render; later tickets add `actions`,
-    /// `persistence` and the rest as they land.
+    /// Only what Popups actually render; later tickets add `actions`
+    /// and the rest as they land.
     async fn get_capabilities(&self) -> Vec<String> {
-        ["body", "body-markup", "body-hyperlinks", "icon-static"]
-            .map(String::from)
-            .to_vec()
+        [
+            "body",
+            "body-markup",
+            "body-hyperlinks",
+            "icon-static",
+            "persistence",
+        ]
+        .map(String::from)
+        .to_vec()
     }
 
     #[allow(clippy::too_many_arguments)] // Signature mandated by the spec.

@@ -34,6 +34,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Command line: `lucent <subcommand>`
 clap = { version = "4.6", features = ["derive"] }
 
+# Typed control-interface replies, and JSON output for scripts
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

@@ -54,6 +54,11 @@ impl Stack {
 }
 
 impl Engine {
+    /// The most recently shown Popup still on screen (`lucent dismiss`).
+    pub fn newest_popup(&self) -> Option<NotificationId> {
+        self.stack.visible.last().map(Popup::id)
+    }
+
     /// Put a Notification on screen: update its Popup in place if it is
     /// visible, update it in Overflow if it is waiting there, otherwise
     /// show it or queue it in Overflow when the stack is full.
@@ -129,6 +134,20 @@ mod tests {
             max_visible: 2,
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn the_newest_popup_is_the_last_one_shown_that_is_still_open() {
+        let mut h = two_visible();
+        assert_eq!(h.engine.newest_popup(), None);
+        for id in 1..=3 {
+            h.notify(notification(id));
+        }
+        assert_eq!(h.engine.newest_popup(), Some(2), "3 waits in Overflow");
+
+        h.send(Event::UserDismissed(2));
+
+        assert_eq!(h.engine.newest_popup(), Some(3));
     }
 
     #[test]

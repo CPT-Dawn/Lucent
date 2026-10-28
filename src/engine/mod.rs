@@ -49,7 +49,7 @@ pub use config::{EngineConfig, Timeouts};
 pub use dnd::DndConfig;
 pub use effect::{CloseReason, Effect, Popup, Status, Timer};
 pub use event::{DndChange, Event};
-pub use history::HistoryConfig;
+pub use history::{HistoryConfig, HistoryEntry};
 pub use ids::IdAllocator;
 pub use notification::{
     Action, Expiry, Hints, Image, ImageData, Notification, NotificationId, Urgency,
@@ -64,6 +64,8 @@ pub struct Engine {
     expiry: expiry::Deadlines,
     history: history::History,
     dnd: dnd::Dnd,
+    /// Fresh ids for restored History entries.
+    ids: IdAllocator,
 }
 
 impl Engine {
@@ -75,7 +77,15 @@ impl Engine {
             expiry: Default::default(),
             history: Default::default(),
             dnd: Default::default(),
+            ids: IdAllocator::new(),
         }
+    }
+
+    /// Share the D-Bus adapter's id allocator, so restored Popups never
+    /// reuse an id an app was given.
+    pub fn with_ids(mut self, ids: IdAllocator) -> Self {
+        self.ids = ids;
+        self
     }
 
     /// Process one event and return the effects to apply, in order.
@@ -99,7 +109,8 @@ impl Engine {
         out
     }
 
-    fn replace_config(&mut self, config: EngineConfig, _out: &mut Vec<Effect>) {
+    fn replace_config(&mut self, config: EngineConfig, out: &mut Vec<Effect>) {
         self.config = config;
+        self.apply_history_limit(out);
     }
 }

@@ -3,15 +3,16 @@
 use super::{CloseReason, Effect, Engine, Notification, NotificationId};
 
 impl Engine {
-    /// The receive pipeline: Rules, then History, then Do Not Disturb, then
-    /// the stack.
+    /// The receive pipeline: Rules first, then Do Not Disturb and the stack,
+    /// then History. The Popup's effects come before History's status
+    /// change, so the Popup appears first.
     pub(super) fn receive(&mut self, mut notification: Notification, out: &mut Vec<Effect>) {
         let outcome = self.apply_rules(&mut notification);
+        if outcome.show && self.dnd_allows(&notification) {
+            self.present(notification.clone(), out);
+        }
         if outcome.record {
             self.record_in_history(&notification, out);
-        }
-        if outcome.show && self.dnd_allows(&notification) {
-            self.present(notification, out);
         }
     }
 
