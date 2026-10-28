@@ -8,10 +8,10 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use gtk4::glib;
+use lucent::config::Config;
 use lucent::engine::{Effect, Event, NotificationId, Popup};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::live_config::Config;
 use window::NotificationWindow;
 
 /// Vertical gap between stacked Popups.
@@ -21,7 +21,7 @@ const FALLBACK_HEIGHT: i32 = 90;
 
 /// The Popups on screen.
 pub struct Ui {
-    config: Rc<Config>,
+    config: RefCell<Rc<Config>>,
     events: UnboundedSender<Event>,
     /// Popup windows, oldest (top) first.
     windows: Rc<RefCell<Vec<NotificationWindow>>>,
@@ -30,10 +30,15 @@ pub struct Ui {
 impl Ui {
     pub fn new(config: Rc<Config>, events: UnboundedSender<Event>) -> Self {
         Self {
-            config,
+            config: RefCell::new(config),
             events,
             windows: Rc::default(),
         }
+    }
+
+    /// Use a reloaded config for Popups shown from now on.
+    pub fn replace_config(&self, config: Rc<Config>) {
+        *self.config.borrow_mut() = config;
     }
 
     /// Apply one engine effect. Effects that aren't about Popups are
@@ -54,7 +59,7 @@ impl Ui {
         let n = &popup.notification;
         tracing::info!(id = n.id, app = %n.app_name, summary = %n.summary, "showing Popup");
         let top = stack_height(&self.windows.borrow());
-        let window = NotificationWindow::new(popup, &self.config, top, &self.events);
+        let window = NotificationWindow::new(popup, &self.config.borrow(), top, &self.events);
         self.windows.borrow_mut().push(window);
         self.restack();
     }
@@ -66,7 +71,7 @@ impl Ui {
             return;
         };
         let top = stack_height(&windows[..index]);
-        let fresh = NotificationWindow::new(popup, &self.config, top, &self.events);
+        let fresh = NotificationWindow::new(popup, &self.config.borrow(), top, &self.events);
         std::mem::replace(&mut windows[index], fresh).fade_out_and_destroy();
         drop(windows);
         self.restack();

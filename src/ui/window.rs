@@ -16,7 +16,7 @@ use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use lucent::engine::{Event, NotificationId, Popup};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::live_config::Config;
+use lucent::config::Config;
 
 /// Margin from screen edges in pixels.
 const SCREEN_MARGIN: i32 = 12;
@@ -78,12 +78,12 @@ impl NotificationWindow {
         window.set_margin(Edge::Right, SCREEN_MARGIN);
 
         // Size — natural height, fixed width.
-        window.set_default_size(config.width as i32, -1);
+        window.set_default_size(config.popup.width as i32, -1);
 
         // ── Content layout ───────────────────────────────────────
         let container = GtkBox::new(Orientation::Vertical, 6);
         container.add_css_class("notification-popup");
-        container.set_width_request(config.width as i32);
+        container.set_width_request(config.popup.width as i32);
 
         // App name
         if !notification.app_name.is_empty() {

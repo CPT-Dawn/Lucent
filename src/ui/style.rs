@@ -1,24 +1,27 @@
-//! GTK4 CSS theming — translucent backgrounds, rounded corners,
-//! dawn-hued accents, all driven by the user's `Config`.
+//! The Popup stylesheet, built from the config and swapped in place when
+//! the config reloads.
 //!
-//! A single global `CssProvider` is built from config values and loaded
-//! once at startup so every notification window inherits the theme.
+//! Interim look: the Themes, `[look]` accent and `style.css` arrive with
+//! the Popup card and Themes tickets (#4, #5). Until then the colours are
+//! Dawn-like constants and only `opacity`, `radius` and `font` apply.
 
 use gtk4::CssProvider;
 use gtk4::gdk::Display;
+use lucent::config::Config;
 
-use crate::live_config::Config;
+/// Dawn-like background, as RGB; the alpha comes from `look.opacity`.
+const BACKGROUND_RGB: &str = "13, 11, 20";
+const BORDER: &str = "#1A1525";
+const TEXT: &str = "#E8E2F0";
 
-/// Build the CSS stylesheet from user configuration values.
 fn build_css(config: &Config) -> String {
-    let border_rule = if config.border_width == 0 {
-        "border: none;".to_string()
-    } else {
-        format!(
-            "border: {}px solid {};",
-            config.border_width, config.border_color
-        )
-    };
+    let look = &config.look;
+    // No font rule means GTK's own setting: the system UI font.
+    let font = look
+        .font
+        .as_deref()
+        .map(|font| format!("font-family: \"{}\";", font.replace('"', "\\\"")))
+        .unwrap_or_default();
 
     format!(
         r#"
@@ -28,56 +31,59 @@ fn build_css(config: &Config) -> String {
 }}
 
 .notification-popup {{
-    background-color: {bg};
-    {border_rule}
+    background-color: rgba({BACKGROUND_RGB}, {opacity});
+    border: 1px solid {BORDER};
     border-radius: {radius}px;
     padding: 14px 18px;
-    color: {text};
+    color: {TEXT};
+    {font}
 }}
 
 .notification-summary {{
     font-weight: 700;
     font-size: 15px;
     line-height: 1.25;
-    font-family: "{font}";
-    color: {text};
 }}
 
 .notification-body {{
     font-size: 13px;
     line-height: 1.3;
-    font-family: "{font}";
-    color: {text};
     opacity: 0.88;
 }}
 
 .notification-app-name {{
     font-size: 11px;
     font-weight: 600;
-    font-family: "{font}";
-    color: {text};
     opacity: 0.68;
 }}
 "#,
-        bg = config.background_color,
-        border_rule = border_rule,
-        text = config.text_color,
-        radius = config.corner_radius,
-        font = config.font_family,
+        opacity = look.opacity,
+        radius = look.radius,
     )
 }
 
-/// Load the global CSS provider for all notification windows.
-pub fn load_css(config: &Config) {
-    let css = build_css(config);
-    let provider = CssProvider::new();
-    provider.load_from_string(&css);
+/// The display-wide stylesheet every Popup window inherits.
+pub struct Stylesheet(CssProvider);
 
-    if let Some(display) = Display::default() {
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
+impl Stylesheet {
+    /// Register the stylesheet for the default display and style it from
+    /// `config`.
+    pub fn new(config: &Config) -> Self {
+        let provider = CssProvider::new();
+        if let Some(display) = Display::default() {
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+        let stylesheet = Self(provider);
+        stylesheet.apply(config);
+        stylesheet
+    }
+
+    /// Restyle every Popup, including those already on screen.
+    pub fn apply(&self, config: &Config) {
+        self.0.load_from_string(&build_css(config));
     }
 }
