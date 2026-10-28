@@ -87,7 +87,7 @@ const POPUP_KEYS: &[&str] = &[
     "margin",
     "output",
 ];
-const TIMEOUT_KEYS: &[&str] = &["low", "normal", "critical"];
+const TIMEOUT_KEYS: &[&str] = &Urgency::NAMES;
 const LOOK_KEYS: &[&str] = &[
     "accent",
     "opacity",
@@ -99,17 +99,7 @@ const LOOK_KEYS: &[&str] = &[
 const HISTORY_KEYS: &[&str] = &["limit"];
 const DND_KEYS: &[&str] = &["allow_critical"];
 const RULE_KEYS: &[&str] = &["app", "summary", "timeout", "urgency", "hide", "history"];
-const URGENCY_NAMES: [&str; 3] = ["low", "normal", "critical"];
 const RULE_HELP: &str = "start each Rule with a `[[rule]]` line and put its keys below it";
-
-fn urgency_from_name(name: &str) -> Option<Urgency> {
-    Some(match name {
-        "low" => Urgency::Low,
-        "normal" => Urgency::Normal,
-        "critical" => Urgency::Critical,
-        _ => return None,
-    })
-}
 
 /// v1 keys and where their job went in v2.
 const V1_KEYS: &[(&str, &str)] = &[
@@ -239,20 +229,16 @@ impl Parser<'_> {
 
     fn timeout(&mut self, key: &Key<'_>, value: &Value<'_>) {
         let name = key.get_ref().as_ref();
-        let slot = match name {
-            "low" => &mut self.config.timeouts.low,
-            "normal" => &mut self.config.timeouts.normal,
-            "critical" => &mut self.config.timeouts.critical,
-            _ => return self.unknown("timeout", key, TIMEOUT_KEYS),
+        let Ok(urgency) = name.parse::<Urgency>() else {
+            return self.unknown("timeout", key, TIMEOUT_KEYS);
         };
-        let default = slot.map_or(0.0, |d| d.as_secs_f64());
+        let timeouts = &self.config.timeouts;
+        let default = timeouts
+            .for_urgency(urgency)
+            .map_or(0.0, |d| d.as_secs_f64());
         if let Some(seconds) = self.number(name, value, 0.0..=MAX_TIMEOUT, default, "seconds") {
             let timeout = (seconds > 0.0).then(|| Duration::from_secs_f64(seconds));
-            match name {
-                "low" => self.config.timeouts.low = timeout,
-                "normal" => self.config.timeouts.normal = timeout,
-                _ => self.config.timeouts.critical = timeout,
-            }
+            *self.config.timeouts.for_urgency_mut(urgency) = timeout;
         }
     }
 
@@ -404,7 +390,7 @@ impl Parser<'_> {
                 "urgency" => {
                     changes = true;
                     rule.urgency =
-                        self.choice("rule.urgency", value, &URGENCY_NAMES, urgency_from_name);
+                        self.choice("rule.urgency", value, &Urgency::NAMES, |n| n.parse().ok());
                 }
                 "hide" => {
                     changes = true;

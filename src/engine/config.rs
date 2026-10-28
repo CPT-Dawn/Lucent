@@ -51,6 +51,14 @@ impl Timeouts {
             Urgency::Critical => self.critical,
         }
     }
+
+    pub fn for_urgency_mut(&mut self, urgency: Urgency) -> &mut Option<Duration> {
+        match urgency {
+            Urgency::Low => &mut self.low,
+            Urgency::Normal => &mut self.normal,
+            Urgency::Critical => &mut self.critical,
+        }
+    }
 }
 
 impl Default for Timeouts {

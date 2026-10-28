@@ -26,7 +26,7 @@ pub fn parse(hints: &HashMap<String, OwnedVariant>) -> Hints {
         urgency: get(&["urgency"])
             .and_then(integer)
             .and_then(|n| u8::try_from(n).ok())
-            .map(Urgency::from_byte)
+            .and_then(|byte| Urgency::try_from(byte).ok())
             .unwrap_or_default(),
         image: image_data.map(Image::Data).or(image_path),
         progress: get(&["value"])

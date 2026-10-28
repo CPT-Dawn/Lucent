@@ -4,6 +4,8 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::daemon::with_daemon;
+use lucent::engine::Urgency;
+
 use crate::dbus::control::HistoryItem;
 
 pub fn run(json: bool) -> ExitCode {
@@ -50,7 +52,7 @@ fn readable(items: &[HistoryItem], now: u64) -> String {
             "" => item.summary.clone(),
             app => format!("{app}: {}", item.summary),
         };
-        if item.urgency == "critical" {
+        if item.urgency == Urgency::Critical {
             title.push_str("  [critical]");
         }
         let age = age(now.saturating_sub(item.time));
@@ -160,7 +162,7 @@ mod tests {
     #[test]
     fn critical_entries_are_marked() {
         let critical = HistoryItem {
-            urgency: "critical".into(),
+            urgency: Urgency::Critical,
             ..item(4, "Power", "Battery at 5%", "", 0)
         };
 

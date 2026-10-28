@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::process::ExitCode;
 
 use lucent::demo::script;
-use lucent::engine::{Image, Notification, NotificationId, Urgency};
+use lucent::engine::{Image, Notification, NotificationId};
 use zbus::{OwnedVariant, Variant as Value};
 
 use super::daemon::with_daemon;
@@ -88,12 +88,7 @@ fn hints(n: &Notification) -> HashMap<&'static str, OwnedVariant> {
             hints.insert(key, value);
         }
     };
-    let urgency: u8 = match n.hints.urgency {
-        Urgency::Low => 0,
-        Urgency::Normal => 1,
-        Urgency::Critical => 2,
-    };
-    put("urgency", Value::from(urgency));
+    put("urgency", Value::from(u8::from(n.hints.urgency)));
     if let Some(percent) = n.hints.progress {
         put("value", Value::from(i32::from(percent)));
     }

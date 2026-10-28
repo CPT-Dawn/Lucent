@@ -80,7 +80,10 @@ impl From<Status> for StatusItem {
 }
 
 /// A History entry as the CLI sees it, on the bus and in `--json`.
+///
+/// The Urgency travels by name, so the bus signature is spelled out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[zvariant(signature = "(ussssst)")]
 pub struct HistoryItem {
     pub id: NotificationId,
     pub app: String,
@@ -89,8 +92,9 @@ pub struct HistoryItem {
     pub summary: String,
     /// The body as sent, possibly with markup (may be empty).
     pub body: String,
-    /// `low`, `normal` or `critical`.
-    pub urgency: String,
+    /// `low`, `normal` or `critical` on the bus and in `--json`.
+    #[serde(with = "urgency_name")]
+    pub urgency: Urgency,
     /// When Lucent received (or last replaced) it, in Unix seconds.
     pub time: u64,
 }
@@ -106,12 +110,7 @@ impl HistoryItem {
             icon: n.app_icon.clone(),
             summary: n.summary.clone(),
             body: n.body.clone(),
-            urgency: match n.hints.urgency {
-                Urgency::Low => "low",
-                Urgency::Normal => "normal",
-                Urgency::Critical => "critical",
-            }
-            .into(),
+            urgency: n.hints.urgency,
             time: received
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |since| since.as_secs()),
@@ -241,6 +240,22 @@ pub trait Control {
     fn status_changed(&self, status: StatusItem) -> zbus::Result<()>;
 }
 
+/// Serde for an Urgency as its name.
+mod urgency_name {
+    use lucent::engine::Urgency;
+    use serde::{Deserialize, Deserializer, Serializer, de};
+
+    pub fn serialize<S: Serializer>(urgency: &Urgency, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(urgency.name())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Urgency, D::Error> {
+        let name = String::deserialize(d)?;
+        name.parse()
+            .map_err(|_| de::Error::unknown_variant(&name, &Urgency::NAMES))
+    }
+}
+
 impl Default for HistoryItem {
     fn default() -> Self {
         Self {
@@ -249,7 +264,7 @@ impl Default for HistoryItem {
             icon: String::new(),
             summary: String::new(),
             body: String::new(),
-            urgency: "normal".into(),
+            urgency: Urgency::Normal,
             time: 0,
         }
     }
@@ -294,9 +309,28 @@ mod tests {
                 icon: "chat-icon".into(),
                 summary: "hi".into(),
                 body: "<b>there</b>".into(),
-                urgency: "critical".into(),
+                urgency: Urgency::Critical,
                 time: 1_000_000 - 90,
             }
         );
+    }
+
+    #[test]
+    fn a_history_item_crosses_the_bus_and_names_its_urgency_in_json() {
+        let item = HistoryItem {
+            id: 3,
+            summary: "Pager".into(),
+            urgency: Urgency::Critical,
+            time: 42,
+            ..HistoryItem::default()
+        };
+
+        let ctxt = zbus::wire::serialized::Context::new(zbus::wire::LE, 0);
+        let bytes = zbus::wire::to_bytes(ctxt, &item).unwrap();
+        let (back, _) = bytes.deserialize::<HistoryItem>().unwrap();
+        let json = serde_json::to_value(&item).unwrap();
+
+        assert_eq!(back, item);
+        assert_eq!(json["urgency"], "critical");
     }
 }

@@ -2,7 +2,9 @@
 //! hint already parsed into typed fields by the D-Bus adapter. The engine
 //! never sees raw D-Bus variants.
 
+use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,13 +69,70 @@ pub enum Urgency {
 }
 
 impl Urgency {
-    /// Interpret the `urgency` hint byte (0 low, 1 normal, 2 critical).
-    /// Unknown values fall back to normal.
-    pub fn from_byte(byte: u8) -> Self {
+    /// Every Urgency, lowest first.
+    pub const ALL: [Urgency; 3] = [Urgency::Low, Urgency::Normal, Urgency::Critical];
+
+    /// Every [`name`](Urgency::name), lowest first.
+    pub const NAMES: [&str; 3] = [
+        Urgency::Low.name(),
+        Urgency::Normal.name(),
+        Urgency::Critical.name(),
+    ];
+
+    /// The name used in the config, the CLI and `--json`: `low`, `normal`
+    /// or `critical`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Urgency::Low => "low",
+            Urgency::Normal => "normal",
+            Urgency::Critical => "critical",
+        }
+    }
+}
+
+impl fmt::Display for Urgency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// A name that isn't `low`, `normal` or `critical`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownUrgency;
+
+impl FromStr for Urgency {
+    type Err = UnknownUrgency;
+
+    /// The exact lowercase [`name`](Urgency::name).
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Urgency::ALL
+            .into_iter()
+            .find(|u| u.name() == name)
+            .ok_or(UnknownUrgency)
+    }
+}
+
+impl TryFrom<u8> for Urgency {
+    type Error = UnknownUrgency;
+
+    /// The freedesktop `urgency` hint byte: 0 low, 1 normal, 2 critical.
+    fn try_from(byte: u8) -> Result<Self, Self::Error> {
         match byte {
-            0 => Urgency::Low,
-            2 => Urgency::Critical,
-            _ => Urgency::Normal,
+            0 => Ok(Urgency::Low),
+            1 => Ok(Urgency::Normal),
+            2 => Ok(Urgency::Critical),
+            _ => Err(UnknownUrgency),
+        }
+    }
+}
+
+impl From<Urgency> for u8 {
+    /// The freedesktop `urgency` hint byte.
+    fn from(urgency: Urgency) -> u8 {
+        match urgency {
+            Urgency::Low => 0,
+            Urgency::Normal => 1,
+            Urgency::Critical => 2,
         }
     }
 }
@@ -113,4 +172,34 @@ pub struct ImageData {
     pub channels: i32,
     /// Shared so Popups and History can hold the same pixels cheaply.
     pub data: Arc<[u8]>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Urgency;
+
+    #[test]
+    fn urgency_names_round_trip_and_reject_anything_else() {
+        let names: Vec<String> = Urgency::ALL.iter().map(|u| u.to_string()).collect();
+        assert_eq!(names, ["low", "normal", "critical"]);
+        for urgency in Urgency::ALL {
+            assert_eq!(urgency.name().parse(), Ok(urgency));
+        }
+        assert!(
+            "Critical".parse::<Urgency>().is_err(),
+            "names are lowercase"
+        );
+        assert!("urgent".parse::<Urgency>().is_err());
+    }
+
+    #[test]
+    fn urgency_wire_bytes_round_trip_and_reject_unknown_bytes() {
+        assert_eq!(Urgency::try_from(0), Ok(Urgency::Low));
+        assert_eq!(Urgency::try_from(1), Ok(Urgency::Normal));
+        assert_eq!(Urgency::try_from(2), Ok(Urgency::Critical));
+        assert!(Urgency::try_from(3).is_err());
+        for urgency in Urgency::ALL {
+            assert_eq!(Urgency::try_from(u8::from(urgency)), Ok(urgency));
+        }
+    }
 }

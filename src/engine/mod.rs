@@ -52,7 +52,7 @@ pub use event::{DndChange, Event, MouseButton};
 pub use history::{HistoryConfig, HistoryEntry};
 pub use ids::IdAllocator;
 pub use notification::{
-    Action, Expiry, Hints, Image, ImageData, Notification, NotificationId, Urgency,
+    Action, Expiry, Hints, Image, ImageData, Notification, NotificationId, UnknownUrgency, Urgency,
 };
 pub use rules::{Pattern, Rule, RuleTimeout, Rules};
 
