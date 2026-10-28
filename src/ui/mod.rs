@@ -17,7 +17,6 @@
 //! | `progress`  | the progress ring and header percentage (pure)       |
 //! | `ago`       | the relative time text (pure)                         |
 
-pub mod ago;
 pub mod card;
 pub mod countdown;
 pub mod icon;

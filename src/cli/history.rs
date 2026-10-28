@@ -1,10 +1,11 @@
 //! `lucent history [--json]`: list History, newest first.
 
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::daemon::with_daemon;
 use lucent::engine::Urgency;
+use lucent::text::ago::ago_phrase;
 use lucent::text::markup::plain_text;
 
 use crate::dbus::control::HistoryItem;
@@ -56,7 +57,7 @@ fn readable(items: &[HistoryItem], now: u64) -> String {
         if item.urgency == Urgency::Critical {
             title.push_str("  [critical]");
         }
-        let age = age(now.saturating_sub(item.time));
+        let age = ago_phrase(Duration::from_secs(now.saturating_sub(item.time)));
         out += &format!("{:>id_width$}  {age:<AGE_WIDTH$}  {title}\n", item.id);
         let body = one_line(&plain_text(&item.body), BODY_WIDTH);
         if !body.is_empty() {
@@ -68,16 +69,6 @@ fn readable(items: &[HistoryItem], now: u64) -> String {
 
 /// Bodies longer than this many characters are cut short.
 const BODY_WIDTH: usize = 80;
-
-/// How long ago, roughly: "just now", "5m ago", "3h ago", "2d ago".
-fn age(seconds: u64) -> String {
-    match seconds {
-        0..60 => "just now".into(),
-        60..3_600 => format!("{}m ago", seconds / 60),
-        3_600..86_400 => format!("{}h ago", seconds / 3_600),
-        _ => format!("{}d ago", seconds / 86_400),
-    }
-}
 
 /// `text` on one line, whitespace collapsed, cut to at most `width`
 /// characters.
@@ -129,7 +120,7 @@ mod tests {
 
         assert_eq!(
             readable(&items, now),
-            "12  just now  Firefox: Download complete\n\
+            "12  20s ago   Firefox: Download complete\n\
              \x20             report.pdf is ready\n\
              \x203  5m ago    Signal: Alice\n\
              \x201  3h ago    Backup finished\n"

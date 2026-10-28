@@ -24,13 +24,13 @@ use gtk4::{Align, Box as GtkBox, DrawingArea, Label, Orientation, Overlay, gdk, 
 use lucent::engine::{Action, Event, MouseButton, Notification, NotificationId, Popup, Urgency};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::ago::{ago, until_change};
 use super::countdown::Countdown;
 use super::icon::{self, Art, Source};
 use super::progress::{self, Geometry, Ring};
 use super::stack::reduced_motion;
 use super::theme::{Look, Rgba, Theme};
 use super::widgets::{Fit, Tile};
+use lucent::text::ago::{ago, until_change};
 use lucent::text::markup::{body_markup, escape};
 
 /// Height of the countdown line.
