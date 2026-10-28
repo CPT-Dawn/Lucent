@@ -195,6 +195,7 @@ impl Card {
     /// Repaint the cairo-drawn parts, which read the Theme at draw time.
     pub fn redraw(&self) {
         self.shared.line.queue_draw();
+        self.shared.ring_area.queue_draw();
     }
 
     /// Show a replaced Notification in place; its countdown starts over.
