@@ -44,15 +44,6 @@ pub struct Timeouts {
 }
 
 impl Timeouts {
-    /// The same timeout for every Urgency (v1's `timeout_seconds`).
-    pub fn uniform(timeout: Option<Duration>) -> Self {
-        Self {
-            low: timeout,
-            normal: timeout,
-            critical: timeout,
-        }
-    }
-
     pub fn for_urgency(&self, urgency: Urgency) -> Option<Duration> {
         match urgency {
             Urgency::Low => self.low,
