@@ -1,0 +1,199 @@
+name: Release
+
+# A pushed tag `v*` builds the x86_64 binary, publishes the GitHub Release and
+# updates the `lucent` and `lucent-bin` AUR packages. Run it by hand with
+# "dry run" ticked to build and validate everything without publishing.
+# See docs/RELEASING.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag, e.g. v2.0.0. A dry run builds the selected branch and only borrows the version, so the tag need not exist."
+        required: true
+      dry_run:
+        description: "Dry run: build and validate, publish nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and validate
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Install system packages
+        run: pacman -Syu --noconfirm --needed git rust gtk4 gtk4-layer-shell namcap
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'workflow_dispatch' && !inputs.dry_run) && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Resolve version
+        id: version
+        run: |
+          version="${TAG#v}"
+          if [[ "$TAG" != v* || ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Tag '$TAG' is not of the form vX.Y.Z" >&2
+            exit 1
+          fi
+          crate="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          if [[ "$crate" != "$version" ]]; then
+            if [[ "$DRY_RUN" == true ]]; then
+              echo "::warning::Cargo.toml says $crate, tag says $version (ignored in a dry run)"
+            else
+              echo "::error::Cargo.toml says $crate but the tag is $TAG; bump Cargo.toml first" >&2
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Create a build user (makepkg refuses root)
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+
+      - name: Test packaging scripts
+        run: sudo -u builder bash packaging/test.sh
+
+      - name: Build release tarballs
+        run: sudo -u builder bash packaging/release-tarballs.sh "${{ steps.version.outputs.version }}" target/release/lucent dist
+
+      - name: Generate PKGBUILD and .SRCINFO
+        run: sudo -u builder bash packaging/aur/prepare.sh "${{ steps.version.outputs.version }}" dist aur
+
+      - name: Validate with namcap and a lucent-bin test build
+        run: |
+          namcap aur/lucent/PKGBUILD aur/lucent-bin/PKGBUILD
+          # Build lucent-bin from the tarball we just made, proving it has
+          # everything the package installs. makepkg uses the local copy.
+          scratch="$(sudo -u builder mktemp -d)"
+          sudo -u builder cp aur/lucent-bin/PKGBUILD dist/lucent-*-x86_64.tar.gz "$scratch/"
+          (cd "$scratch" && sudo -u builder makepkg --noconfirm)
+          namcap "$scratch"/lucent-bin-*.pkg.tar*
+          pacman -Qlp "$scratch"/lucent-bin-*.pkg.tar*
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+      - name: Upload AUR files
+        uses: actions/upload-artifact@v4
+        with:
+          name: aur
+          path: |
+            aur/*/PKGBUILD
+            aur/*/.SRCINFO
+          include-hidden-files: true
+          if-no-files-found: error
+
+  github-release:
+    name: Publish GitHub Release
+    needs: build
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "Lucent $TAG" --generate-notes
+          fi
+
+  aur:
+    name: Publish ${{ matrix.package }} to the AUR
+    needs: [build, github-release]
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [lucent, lucent-bin]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: aur
+          path: aur
+
+      - name: Configure SSH for the AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$AUR_SSH_PRIVATE_KEY" ]]; then
+            echo "::error::The AUR_SSH_PRIVATE_KEY secret is not set" >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          # Accept the key as-is or base64-encoded (the v1 workflow allowed both).
+          if grep -q "BEGIN .*PRIVATE KEY" <<< "$AUR_SSH_PRIVATE_KEY"; then
+            printf '%s\n' "$AUR_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/aur
+          else
+            printf '%s' "$AUR_SSH_PRIVATE_KEY" | tr -d '\r\n' | base64 -d > ~/.ssh/aur
+          fi
+          chmod 600 ~/.ssh/aur
+          ssh-keygen -y -f ~/.ssh/aur > /dev/null
+          ssh-keyscan -t ed25519,rsa aur.archlinux.org >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << 'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Commit and push
+        env:
+          PACKAGE: ${{ matrix.package }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # Cloning a package that doesn't exist yet gives an empty repo;
+          # the first push creates it.
+          git clone "ssh://aur@aur.archlinux.org/$PACKAGE.git" aur-repo
+          cp "aur/$PACKAGE/PKGBUILD" "aur/$PACKAGE/.SRCINFO" aur-repo/
+          cd aur-repo
+          git config user.name "CPT-Dawn"
+          git config user.email "dev@cptdawn.dev"
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "$PACKAGE is already up to date."
+            exit 0
+          fi
+          git commit -m "Update to $VERSION"
+          git push origin HEAD:master
