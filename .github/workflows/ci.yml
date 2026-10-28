@@ -45,3 +45,21 @@ jobs:
 
       - name: Test
         run: cargo test --locked
+
+  packaging:
+    name: release packaging scripts
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install system packages
+        run: pacman -Syu --noconfirm --needed git
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test packaging scripts
+        # makepkg refuses to run as root.
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          sudo -u builder bash packaging/test.sh
