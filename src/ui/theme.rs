@@ -321,7 +321,40 @@ window.lucent-stack {{ background: none; box-shadow: none; }}
         glow_off = glow(0.0),
         glow_on = glow(0.22),
     );
+    css.push_str(&pill_css(theme, &shadow));
     css
+}
+
+/// The "+N more" Overflow pill: a capsule in the card's colours, with
+/// three accent-gradient dots.
+fn pill_css(theme: &Theme, shadow: &str) -> String {
+    format!(
+        r#"
+button.overflow-pill {{
+  all: unset;
+  color: {fg};
+  background-color: {bg};
+  border: 1px solid {line};
+  border-radius: 999px;
+  box-shadow: {shadow};
+  font-weight: 600;
+  font-size: 12px;
+  padding: 8px 14px;
+}}
+button.overflow-pill label {{ line-height: 1; }}
+button.overflow-pill .dot {{
+  min-width: 5px;
+  min-height: 5px;
+  border-radius: 50%;
+  background-image: linear-gradient(90deg, {a1}, {a2});
+}}
+"#,
+        fg = theme.foreground.css(),
+        bg = theme.background.css(),
+        line = theme.line.css(),
+        a1 = theme.accent_1.css(),
+        a2 = theme.accent_2.css(),
+    )
 }
 
 #[cfg(test)]

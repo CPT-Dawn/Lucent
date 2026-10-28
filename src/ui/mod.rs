@@ -5,6 +5,7 @@
 //! |-------------|-------------------------------------------------------|
 //! | `stack`     | the layer-shell window and enter/leave/reflow motion  |
 //! | `card`      | one Popup card and its pointer input                  |
+//! | `pill`      | the "+N more" Overflow pill                           |
 //! | `widgets`   | the icon `Tile` and the transform-placed `StackView`  |
 //! | `theme`     | Theme colour tokens, the Look, the generated CSS      |
 //! | `style`     | the display-wide stylesheet, reloadable               |
@@ -22,6 +23,7 @@ pub mod icon;
 pub mod layout;
 pub mod markup;
 pub mod motion;
+pub mod pill;
 pub mod stack;
 pub mod style;
 pub mod theme;
@@ -52,18 +54,19 @@ impl Ui {
         let look = Look::from_config(&config);
         let theme = Theme::dawn();
         Self {
-            stack: Stack::new(&look, &theme),
+            stack: Stack::new(&look, &theme, config.popup.output.clone(), &events),
             look: RefCell::new(look),
             theme: Rc::new(RefCell::new(theme)),
             events,
         }
     }
 
-    /// Use a reloaded config: placement and width apply at once, the rest
-    /// to Popups shown or replaced from now on.
+    /// Use a reloaded config: placement, output and width apply at once,
+    /// the rest to Popups shown or replaced from now on.
     pub fn replace_config(&self, config: Rc<Config>) {
         let look = Look::from_config(&config);
         self.stack.set_look(&look, &self.theme.borrow());
+        self.stack.set_output(config.popup.output.clone());
         *self.look.borrow_mut() = look;
     }
 
@@ -77,6 +80,7 @@ impl Ui {
                 tracing::debug!(id, reason = reason.code(), "removing Popup");
                 self.stack.remove(*id);
             }
+            Effect::OverflowChanged { count } => self.stack.set_overflow(*count),
             Effect::CountdownPaused { id, remaining } => {
                 tracing::debug!(id, ?remaining, "countdown paused");
                 self.stack
