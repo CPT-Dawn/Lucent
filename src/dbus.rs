@@ -165,7 +165,7 @@ impl DbusAdapter {
 
 fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
     // Signature susssasa{sv}i. The fields not used yet arrive with their tickets.
-    let (app_name, _replaces_id, _app_icon, summary, body, _actions, _hints, _timeout): (
+    let (app_name, replaces_id, _app_icon, summary, body, _actions, _hints, _timeout): (
         String,
         u32,
         String,
@@ -180,6 +180,7 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
         app_name,
         summary,
         body,
+        replaces_id,
     })
 }
 

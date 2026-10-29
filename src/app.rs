@@ -152,6 +152,11 @@ impl App {
                         Err(e) => error!("could not start the timer for {id}: {e}"),
                     }
                 }
+                Effect::CancelTimer(id) => {
+                    if let Some(token) = self.timers.remove(&id) {
+                        self.handle.remove(token);
+                    }
+                }
                 Effect::Closed { id, reason } => self.dbus.emit_closed(id, reason),
             }
         }
