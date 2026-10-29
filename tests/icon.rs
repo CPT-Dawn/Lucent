@@ -5,8 +5,9 @@
 #[path = "support/icons.rs"]
 mod support;
 
+use lucent::dbus::image_from_hints;
 use lucent::icon::Icons;
-use lucent::image::{Image, from_hints};
+use lucent::image::Image;
 use support::{RED, RED_SVG, SIZE, inspect, write_png};
 
 #[test]
@@ -43,7 +44,7 @@ fn inline_pixels_are_scaled_to_the_icon_size() {
         Box::new([255u8, 0, 0].repeat(4)),
     ])) as Box<dyn dbus::arg::RefArg>);
     let hints = [("image-data".to_owned(), pixels)].into_iter().collect();
-    let image = from_hints("", &hints).unwrap();
+    let image = image_from_hints("", &hints).unwrap();
 
     let icon = Icons::new(SIZE, "hicolor").load(&image);
 

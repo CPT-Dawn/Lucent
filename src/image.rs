@@ -1,20 +1,13 @@
-//! Picks the one image a Notification shows from `app_icon` and its hints.
+//! A Notification's image, free of any transport types.
 //!
-//! The order follows the freedesktop spec (1.3): `image-data`, then
-//! `image-path`, then `app_icon`, then the legacy `icon_data`. The spec's
-//! older `image_data` / `image_path` spellings count as their dashed names.
-//! A hint that cannot be used is skipped in favour of the next one.
-//!
-//! Pixel hints are converted and scaled down here, once, as they arrive, so a
-//! screenshot sent as `image-data` never stays in memory at full size. Files
-//! and icon names are only named here; [`crate::icon`] loads them.
+//! The D-Bus adapter picks which hint to use and unpacks it; this module
+//! turns what it finds into an [`Image`]. Inline pixels are converted and
+//! scaled down here, once, as they arrive, so a screenshot sent as
+//! `image-data` never stays in memory at full size. Files and icon names are
+//! only named here; [`crate::icon`] loads them.
 
 use std::path::PathBuf;
 use std::sync::Arc;
-
-use dbus::arg::{PropMap, RefArg, cast};
-
-use crate::debug;
 
 /// The longest side pixel hints are kept at. Popups draw icons far smaller,
 /// so this leaves room for any icon size without holding megabytes.
@@ -60,35 +53,18 @@ impl Pixels {
     }
 }
 
-/// The image to show for a Notification, if any.
-pub fn from_hints(app_icon: &str, hints: &PropMap) -> Option<Image> {
-    let pixels = |key: &str| {
-        let value = hints.get(key)?;
-        let decoded = decode(&*value.0);
-        if decoded.is_none() {
-            debug!("ignoring a malformed {key} hint");
+impl Image {
+    /// Reads an icon name, absolute path or `file://` URI; empty is none.
+    pub fn from_name(s: &str) -> Option<Self> {
+        if s.is_empty() {
+            None
+        } else if let Some(path) = s.strip_prefix("file://") {
+            Some(Self::File(percent_decode(path).into()))
+        } else if s.starts_with('/') {
+            Some(Self::File(s.into()))
+        } else {
+            Some(Self::Icon(s.to_owned()))
         }
-        decoded.map(|p| Image::Pixels(Arc::new(p)))
-    };
-    let named = |key: &str| hints.get(key)?.0.as_str().and_then(name);
-    pixels("image-data")
-        .or_else(|| pixels("image_data"))
-        .or_else(|| named("image-path"))
-        .or_else(|| named("image_path"))
-        .or_else(|| name(app_icon))
-        .or_else(|| pixels("icon_data"))
-}
-
-/// Reads an icon name, absolute path or `file://` URI.
-fn name(s: &str) -> Option<Image> {
-    if s.is_empty() {
-        None
-    } else if let Some(path) = s.strip_prefix("file://") {
-        Some(Image::File(percent_decode(path).into()))
-    } else if s.starts_with('/') {
-        Some(Image::File(s.into()))
-    } else {
-        Some(Image::Icon(s.to_owned()))
     }
 }
 
@@ -115,73 +91,92 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Decodes an `(iiibiiay)` hint: width, height, rowstride, has_alpha,
-/// bits_per_sample, channels, data. Only 8-bit RGB and RGBA exist in practice.
-fn decode(value: &(dyn RefArg + 'static)) -> Option<Pixels> {
-    let int = |i| value.as_static_inner(i)?.as_i64();
-    let (width, height, rowstride) = (int(0)?, int(1)?, int(2)?);
-    let has_alpha = int(3)? != 0;
-    let (bits, channels) = (int(4)?, int(5)?);
-    let data = cast::<Vec<u8>>(value.as_static_inner(6)?)?;
+/// Pixels as a sender describes them: the fields of the spec's `(iiibiiay)`
+/// image hints, in that order.
+#[derive(Debug, Clone, Copy)]
+pub struct RawPixels<'a> {
+    pub width: i64,
+    pub height: i64,
+    pub rowstride: i64,
+    pub has_alpha: bool,
+    pub bits_per_sample: i64,
+    pub channels: i64,
+    pub data: &'a [u8],
+}
 
-    let (width, height, rowstride, channels) = (
-        usize::try_from(width).ok()?,
-        usize::try_from(height).ok()?,
-        usize::try_from(rowstride).ok()?,
-        usize::try_from(channels).ok()?,
-    );
-    let valid = width > 0
-        && height > 0
-        && bits == 8
-        && channels == if has_alpha { 4 } else { 3 }
-        && rowstride >= width * channels
-        && data.len() >= rowstride * (height - 1) + width * channels;
-    if !valid {
-        return None;
-    }
+impl Pixels {
+    /// Converts and scales down `raw`, or `None` if it does not describe
+    /// valid pixels. Only 8-bit RGB and RGBA exist in practice.
+    pub fn from_raw(raw: RawPixels<'_>) -> Option<Self> {
+        let RawPixels {
+            width,
+            height,
+            rowstride,
+            has_alpha,
+            bits_per_sample: bits,
+            channels,
+            data,
+        } = raw;
 
-    // Box-filter down so the longest side fits MAX_SIDE, averaging in
-    // premultiplied space so transparent pixels do not darken edges.
-    let longest = width.max(height);
-    let max = MAX_SIDE as usize;
-    let (out_w, out_h) = if longest > max {
-        (
-            (width * max / longest).max(1),
-            (height * max / longest).max(1),
-        )
-    } else {
-        (width, height)
-    };
-    let mut out = Vec::with_capacity(out_w * out_h * 4);
-    for oy in 0..out_h {
-        let (y0, y1) = (
-            oy * height / out_h,
-            ((oy + 1) * height / out_h).max(oy * height / out_h + 1),
+        let (width, height, rowstride, channels) = (
+            usize::try_from(width).ok()?,
+            usize::try_from(height).ok()?,
+            usize::try_from(rowstride).ok()?,
+            usize::try_from(channels).ok()?,
         );
-        for ox in 0..out_w {
-            let (x0, x1) = (
-                ox * width / out_w,
-                ((ox + 1) * width / out_w).max(ox * width / out_w + 1),
+        let valid = width > 0
+            && height > 0
+            && bits == 8
+            && channels == if has_alpha { 4 } else { 3 }
+            && rowstride >= width * channels
+            && data.len() >= rowstride * (height - 1) + width * channels;
+        if !valid {
+            return None;
+        }
+
+        // Box-filter down so the longest side fits MAX_SIDE, averaging in
+        // premultiplied space so transparent pixels do not darken edges.
+        let longest = width.max(height);
+        let max = MAX_SIDE as usize;
+        let (out_w, out_h) = if longest > max {
+            (
+                (width * max / longest).max(1),
+                (height * max / longest).max(1),
+            )
+        } else {
+            (width, height)
+        };
+        let mut out = Vec::with_capacity(out_w * out_h * 4);
+        for oy in 0..out_h {
+            let (y0, y1) = (
+                oy * height / out_h,
+                ((oy + 1) * height / out_h).max(oy * height / out_h + 1),
             );
-            let mut sum = [0u32; 4];
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let p = &data[y * rowstride + x * channels..][..channels];
-                    let a = if has_alpha { u32::from(p[3]) } else { 255 };
-                    sum[0] += a;
-                    for c in 0..3 {
-                        sum[c + 1] += (u32::from(p[c]) * a + 127) / 255;
+            for ox in 0..out_w {
+                let (x0, x1) = (
+                    ox * width / out_w,
+                    ((ox + 1) * width / out_w).max(ox * width / out_w + 1),
+                );
+                let mut sum = [0u32; 4];
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let p = &data[y * rowstride + x * channels..][..channels];
+                        let a = if has_alpha { u32::from(p[3]) } else { 255 };
+                        sum[0] += a;
+                        for c in 0..3 {
+                            sum[c + 1] += (u32::from(p[c]) * a + 127) / 255;
+                        }
                     }
                 }
+                let n = ((y1 - y0) * (x1 - x0)) as u32;
+                let [a, r, g, b] = sum.map(|s| (s + n / 2) / n);
+                out.extend_from_slice(&(a << 24 | r << 16 | g << 8 | b).to_ne_bytes());
             }
-            let n = ((y1 - y0) * (x1 - x0)) as u32;
-            let [a, r, g, b] = sum.map(|s| (s + n / 2) / n);
-            out.extend_from_slice(&(a << 24 | r << 16 | g << 8 | b).to_ne_bytes());
         }
+        Some(Pixels {
+            width: out_w as u32,
+            height: out_h as u32,
+            data: out,
+        })
     }
-    Some(Pixels {
-        width: out_w as u32,
-        height: out_h as u32,
-        data: out,
-    })
 }

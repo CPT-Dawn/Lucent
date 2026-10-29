@@ -8,17 +8,19 @@
 use std::error::Error;
 use std::ffi::CString;
 use std::os::fd::RawFd;
+use std::sync::Arc;
 use std::time::Duration;
 
 use dbus::Message;
-use dbus::arg::PropMap;
+use dbus::arg::{PropMap, RefArg, cast};
 use dbus::blocking::Connection;
 use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
 use dbus::channel::{BusType, Channel};
 use dbus::message::MessageType;
 
 use crate::core::{Action, CloseReason, Effect, Event, Notification, Timeout, Urgency};
-use crate::{debug, image};
+use crate::debug;
+use crate::image::{Image, Pixels, RawPixels};
 
 pub const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
@@ -232,7 +234,7 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
         PropMap,
         i32,
     ) = msg.read_all()?;
-    let image = image::from_hints(&app_icon, &hints);
+    let image = image_from_hints(&app_icon, &hints);
     debug!("Notify from {app_name:?}: {summary:?}, image {image:?}");
     Ok(Notification {
         image,
@@ -298,6 +300,45 @@ fn test_hook(
     };
     pending.extend(handle(event));
     msg.method_return()
+}
+
+/// The one image a Notification shows, from `app_icon` and its hints.
+///
+/// The order follows the freedesktop spec (1.3): `image-data`, then
+/// `image-path`, then `app_icon`, then the legacy `icon_data`. The spec's
+/// older `image_data` / `image_path` spellings count as their dashed names.
+/// A hint that cannot be used is skipped in favour of the next one.
+pub fn image_from_hints(app_icon: &str, hints: &PropMap) -> Option<Image> {
+    let pixels = |key: &str| {
+        let value = hints.get(key)?;
+        let decoded = decode_pixels(&*value.0);
+        if decoded.is_none() {
+            debug!("ignoring a malformed {key} hint");
+        }
+        decoded.map(|p| Image::Pixels(Arc::new(p)))
+    };
+    let named = |key: &str| hints.get(key)?.0.as_str().and_then(Image::from_name);
+    pixels("image-data")
+        .or_else(|| pixels("image_data"))
+        .or_else(|| named("image-path"))
+        .or_else(|| named("image_path"))
+        .or_else(|| Image::from_name(app_icon))
+        .or_else(|| pixels("icon_data"))
+}
+
+/// Unpacks an `(iiibiiay)` hint: width, height, rowstride, has_alpha,
+/// bits_per_sample, channels, data.
+fn decode_pixels(value: &(dyn RefArg + 'static)) -> Option<Pixels> {
+    let int = |i| value.as_static_inner(i)?.as_i64();
+    Pixels::from_raw(RawPixels {
+        width: int(0)?,
+        height: int(1)?,
+        rowstride: int(2)?,
+        has_alpha: int(3)? != 0,
+        bits_per_sample: int(4)?,
+        channels: int(5)?,
+        data: cast::<Vec<u8>>(value.as_static_inner(6)?)?,
+    })
 }
 
 /// The `urgency` hint, a byte by the spec; some senders use other integer
