@@ -1,192 +1,403 @@
 # Lucent
 
-A D-Bus activated Wayland notification daemon in Rust with zero resident idle footprint.
+**A Wayland notification daemon that isn't there until you need it.**
 
-[![CI](https://img.shields.io/badge/CI-placeholder-inactive)](#)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-1.XX%2B-orange?logo=rust)](#)
+[![CI](https://github.com/CPT-Dawn/Lucent/actions/workflows/ci.yml/badge.svg)](https://github.com/CPT-Dawn/Lucent/actions/workflows/ci.yml)
+[![AUR](https://img.shields.io/aur/version/lucent)](https://aur.archlinux.org/packages/lucent)
+[![Rust 1.92+](https://img.shields.io/badge/Rust-1.92%2B-orange?logo=rust)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-![Lucent Demo](assets/demo.gif)
+![Lucent's default Preset, Midnight Bloom, under Hyprland blur: Popups for each Urgency, one with Action buttons and one with a progress bar](assets/midnight-bloom.png)
 
-## Architecture & Philosophy
+- **Lightest at idle.** When nothing is on screen, Lucent is not running: no
+  process, no memory, no CPU wakeups. D-Bus starts it for the next
+  Notification, and it exits a few seconds after the last Popup closes. The
+  other daemons in the [benchmark](#benchmark) stay resident at 8.7 to
+  47 MiB.
+- **Quick.** One thread, no toolkit, no async runtime. A Popup reaches the
+  compositor about 7 ms after `notify-send` while Lucent is up, and about
+  28 ms when it has to start first. Each Popup is drawn once and redrawn only
+  when its content or hover state changes.
+- **Good-looking by default.** *Midnight Bloom* is smoked glass with mint
+  accents, made for compositor blur and still readable without it. Two more
+  Presets, `light` and `opaque`, are one line away.
 
-Lucent implements `org.freedesktop.Notifications` as a D-Bus-activated service (`org.freedesktop.Notifications.service`) rather than a permanently running daemon.
+<table>
+  <tr>
+    <td><img src="assets/light.png" alt="The light Preset"></td>
+    <td><img src="assets/opaque.png" alt="The opaque Preset"></td>
+  </tr>
+  <tr>
+    <td align="center"><code>preset = "light"</code></td>
+    <td align="center"><code>preset = "opaque"</code></td>
+  </tr>
+</table>
 
-- **Headless activation path:** no `systemd --user` unit and no compositor autostart stanza are required.
-- **Zero idle residency:** when no notification is sent, Lucent is not running and consumes no resident memory.
-- **Event-driven runtime:** process startup is triggered by D-Bus method calls; notification lifecycle is driven by IPC events.
-- **Rust memory safety:** notification state, IPC routing, and rendering are implemented in Rust, with Wayland surfaces via `gtk4-layer-shell`.
+<sub>Captured with <code>grim</code> on Hyprland 0.57 using the layer rule from
+<a href="#blur-and-animation">Blur and animation</a>, over a test pattern.
+The Popups are the <code>notify-send</code> commands from
+<a href="#usage">Usage</a>, with Breeze icons.</sub>
 
-Compared to legacy X11-era notification daemons (long-lived background services with startup orchestration), Lucent is bus-activated and compositor-native on Wayland.
+## Benchmark
 
-> [!WARNING]
-> Lucent requires a Wayland session and layer-shell support through the GTK4/layer-shell stack.
+Measured on 2026-10-29: Intel Core i7-13700HX, 31 GiB RAM, Linux
+7.2.11-arch1-1, Hyprland 0.57.0, with `bench/benchmark.py --runs 10
+--idle-seconds 60`. Latencies are medians.
 
-## Installation
+| Daemon | Version | Binary size | Idle RSS | Idle wakeups | Peak RSS, 5 Popups | PSS, 5 Popups | Cold start | Warm |
+|---|---|--:|--:|--:|--:|--:|--:|--:|
+| **lucent** | 1.1.0 (be7e4e3)[^ver] | 1.8 MiB | **0 (not running)** | **0** | 24.5 MiB | 9.6 MiB | 28.0 ms | 6.7 ms |
+| lucent (resident) | 1.1.0 (be7e4e3)[^ver] | 1.8 MiB | 9.1 MiB | 0 | 24.4 MiB | 9.6 MiB | 31.1 ms | 6.8 ms |
+| mako | 1.11.0-1 | 91 KiB | 8.7 MiB | 0 | 22.9 MiB | 8.0 MiB | 25.7 ms | 6.1 ms |
+| dunst | 1.13.2-3 | 207 KiB | 11.1 MiB | 63 | 30.5 MiB | 11.2 MiB | 14.8 ms[^dunst] | 9.8 ms |
+| swaync | 0.12.6-1 | 615 KiB | 47.1 MiB | 0 | 307.4 MiB | 220.8 MiB | 231.2 ms | 43.5 ms |
+| fnott | 1.8.0-1 | 187 KiB | 14.6 MiB | 0 | 20.6 MiB | 7.4 MiB | 31.3 ms | 5.8 ms |
 
-### Arch Linux (AUR)
+[^ver]: A build of the `v2` branch at commit be7e4e3, before its version
+    number was bumped.
+[^dunst]: Too good to be true. dunst attaches a buffer to its 24×24 cursor
+    surface as it starts, about 31 ms before it draws the Popup, and the
+    benchmark takes that first commit for the Popup's first frame (a limit
+    noted in [bench/README.md](bench/README.md)). Its real cold start is
+    nearer 45 ms.
 
-#### `lucent`
+Reproduce it with [`bench/benchmark.py`](bench/README.md), which also explains
+every column. In short: each daemon runs alone on a private D-Bus with its
+packaged defaults; *idle* is a 60 s window with no Popup shown; *PSS* counts
+shared library pages fairly; *cold start* is from `notify-send` to the first
+frame handed to the compositor with no daemon process running, *warm* the
+same with the daemon already up.
 
-```bash
+What the table says, plainly:
+
+- **Idle** is where Lucent wins outright: it has exited, so there is nothing
+  to measure. Kept resident (`idle_exit = false`), it sits with mako, at
+  about 9 MiB.
+- **While showing Popups**, fnott and mako use about 2 MiB less PSS than
+  Lucent, and less peak RSS too. Lucent's binary is also the largest here.
+- **Latency** is on par with mako and fnott, warm or cold. Cold start is the
+  price of Idle exit: the first Notification after a quiet spell starts a
+  process, which costs about 20 ms more than a warm one.
+
+## Install
+
+Arch Linux, from the AUR:
+
+```sh
 paru -S lucent
 ```
 
-All packages install:
+Other distributions: see [Building from source](#building-from-source).
 
-- `lucent` to `/usr/bin/lucent`
-- D-Bus activation file to `/usr/share/dbus-1/services/org.freedesktop.Notifications.service`
+## That's it
 
-### Building from Source (Non-Arch)
+There is no autostart to set up: no `exec-once`, no systemd unit, no
+`spawn-at-startup`. The package installs a D-Bus activation file, so the first
+Notification starts Lucent, and Lucent exits again when it has nothing left to
+show.
 
-```bash
+If another notification daemon is running, Lucent steps aside and logs which
+one holds the bus name. See [Switching from mako, dunst or
+swaync](#switching-from-mako-dunst-or-swaync).
+
+## Usage
+
+Anything that sends desktop notifications works, `notify-send` included:
+
+```sh
+notify-send "Build finished" "All tests passed"
+notify-send -u low -a Syncthing -i folder-sync "Folder synced" "Documents is up to date"
+notify-send -a Volume -i multimedia-volume-control -h int:value:65 "Volume" "65%"
+notify-send -a Calendar -i x-office-calendar -A open=Open -A snooze=Snooze \
+  "Design review in 5 minutes" "Room 3, with <b>Alex</b> and <i>Priya</i>"
+notify-send -u critical -a Power -i battery-caution "Battery low" "5% remaining. Plug in now."
+```
+
+(`-A` makes `notify-send` wait and print the Action you click.)
+
+- **Urgency:** critical Popups take the `critical` colour and never time out;
+  low ones are faded so they don't compete for attention.
+- **Actions** appear as buttons. **Progress** comes from the `value` hint.
+  **Icons** come from your icon theme (PNG or SVG), or from an image the app
+  sends (album art, avatars).
+- **Mouse:** left-click runs the Default action and dismisses the Popup,
+  middle-click dismisses it, right-click dismisses everything. Hovering a
+  Popup pauses its timeout. Popups never take keyboard focus.
+- **Stack and Queue:** up to five Popups are shown at once, newest nearest the
+  anchor corner. The rest wait in the Queue, shown as "+N more", and appear as
+  space frees up. A Notification that replaces another (a volume change, say)
+  updates its Popup in place.
+
+`lucent --default-config` prints the reference config; that is the only
+command-line option.
+
+## Configure
+
+Lucent needs no config file. To change something, create
+`~/.config/lucent/config.toml` and set only what you want; every key you
+leave out keeps its default. Changes apply from the next Notification, since
+Lucent reads the file each time it starts.
+
+```sh
+lucent --default-config   # every option, commented, with its default
+```
+
+The same file is installed at `/usr/share/doc/lucent/config.toml`. A typo
+never silences your desktop: a broken file is logged and the defaults are
+used, and unknown keys are logged and skipped.
+
+### Presets
+
+```toml
+[theme]
+preset = "light"   # "midnight-bloom" (default), "light" or "opaque"
+```
+
+| Preset | Look | Use it when |
+|---|---|---|
+| `midnight-bloom` | Dark smoked glass, mint accents | Your compositor blurs (it's still readable if not) |
+| `light` | Paper-white glass, ink text | You have a light desktop |
+| `opaque` | Midnight Bloom on solid ground | Your compositor has no blur |
+
+### Theme overrides
+
+Any Theme value can be set on top of the Preset:
+
+```toml
+[theme]
+preset = "midnight-bloom"
+font = "JetBrains Mono, monospace"
+background = "rgba(20, 27, 31, 0.70)"
+accent = "#FF9E64"
+radius = 12
+```
+
+Colours are `"#RRGGBB"`, `"#RRGGBBAA"`, `"rgb(r, g, b)"` or
+`"rgba(r, g, b, a)"`. The default font is `Inter Variable, Inter, sans-serif`
+(Arch: `pacman -S inter-font`); the variable font keeps memory down, and
+without Inter installed your `sans-serif` is used.
+
+### Layout and behaviour
+
+```toml
+[general]
+timeout = 8000             # ms; apps may ask for their own (honor_app_timeouts)
+max_visible = 3
+right_click = "dismiss"    # instead of "dismiss-all"
+
+[layout]
+anchor = "bottom-center"
+width = 400
+monitor = "DP-1"           # unset = the compositor's choice, normally the focused monitor
+
+[layout.margin]
+bottom = 48
+```
+
+### Rules
+
+Rules restyle, or retime, the Notifications that match an app name and/or an
+Urgency. Later Rules win.
+
+```toml
+[[rule]]
+app_name = "Spotify"
+timeout = 3000
+theme = { summary_size = 13, accent = "#1DB954" }
+
+[[rule]]
+urgency = "critical"
+theme = { critical = "#FF9E64", border_width = 2 }
+```
+
+### Staying resident
+
+Idle exit trades a cold start on the first Notification after a quiet spell
+for zero idle cost. To keep Lucent running instead:
+
+```toml
+[general]
+idle_exit = false
+```
+
+## Blur and animation
+
+Lucent draws a translucent Popup and leaves blur and enter/exit animation to
+the compositor, so it never draws a frame it doesn't need. Every Popup is a
+layer surface with the namespace `lucent`.
+
+### Hyprland
+
+Hyprland 0.55 and later (`hyprland.lua`):
+
+```lua
+hl.layer_rule({
+    name         = "lucent",
+    match        = { namespace = "^lucent$" },
+    blur         = true,
+    ignore_alpha = 0.1,
+    animation    = "slide right",
+})
+```
+
+Hyprland 0.53 and 0.54 (`hyprland.conf`):
+
+```ini
+layerrule {
+    name = lucent
+    match:namespace = ^lucent$
+    blur = on
+    ignore_alpha = 0.1
+    animation = slide right
+}
+```
+
+Blur itself must be on (`decoration.blur.enabled`, the default). Use
+`slide left` for a left anchor, `slide top` or `slide bottom` for the centre
+ones, or `popin 80%` or `fade`.
+
+### Sway
+
+Plain Sway has no blur. [SwayFX](https://github.com/WillPower3309/swayfx)
+does:
+
+```
+blur enable
+layer_effects "lucent" {
+    blur enable;
+    blur_ignore_transparent enable;
+    corner_radius 20;
+}
+```
+
+Neither animates layer surfaces.
+
+### niri
+
+niri 26.04 and later:
+
+```kdl
+layer-rule {
+    match namespace="^lucent$"
+    geometry-corner-radius 20
+    background-effect {
+        blur true
+    }
+}
+```
+
+`geometry-corner-radius` rounds the blur to match the Popup; change it if
+you change `radius`. niri does not animate layer surfaces.
+
+## Switching from mako, dunst or swaync
+
+Only one daemon can own the notification bus name, and when several are
+installed, which one D-Bus starts is not something you choose. So remove the
+old one:
+
+1. Remove whatever starts it: an `exec-once` line (Hyprland), an `exec` line
+   (Sway) or a `spawn-at-startup` line (niri), and its systemd unit if you
+   enabled one:
+
+   ```sh
+   systemctl --user disable --now mako.service   # or dunst / swaync / fnott
+   ```
+
+2. Uninstall it, which also removes its D-Bus activation file:
+
+   ```sh
+   paru -Rns mako   # or dunst / swaync / fnott
+   ```
+
+3. Stop it if it is still running (`pkill mako`), or log out and back in.
+
+Then `notify-send hello` should show a Lucent Popup. Your old config is not
+read; Lucent's options are in `lucent --default-config`.
+
+## Troubleshooting and FAQ
+
+**Nothing shows up.** Run Lucent in a terminal with debug logging and send a
+Notification from another:
+
+```sh
+LUCENT_LOG=debug lucent
+```
+
+If it says `org.freedesktop.Notifications is already owned by mako (pid
+1234)`, another daemon has the bus name; see
+[Switching](#switching-from-mako-dunst-or-swaync). When D-Bus starts Lucent,
+its log goes to your user journal: `journalctl --user -b | grep -i lucent`.
+
+**No blur.** Blur is your compositor's job: add the rule for your compositor
+from [Blur and animation](#blur-and-animation). On Hyprland,
+`hyprctl layers` should list a `lucent` layer while a Popup is showing. With
+no blur available, `preset = "opaque"` looks intentional rather than
+see-through.
+
+**Popups are on the wrong monitor.** By default the compositor picks, which
+is normally the focused monitor. Pin one with `[layout] monitor = "<name>"`,
+using a name from `hyprctl monitors`, `swaymsg -t get_outputs` or
+`niri msg outputs`. A name that matches nothing is logged.
+
+**My config change did nothing.** Lucent reads its config when it starts. If
+a Popup is still showing, it is still the old process: wait for it to exit
+(about 5 s after the last Popup), then send another. Check the log for a
+parse error.
+
+**The first Notification is a little slower than the rest.** That is Idle
+exit starting a fresh process; see the cold-start column in the
+[benchmark](#benchmark). If you'd rather pay memory than latency, set
+`idle_exit = false`.
+
+**Upgrading from Lucent 1.x.** v2 is a clean break: v1 config keys such as
+`background_color` or `timeout_seconds` are logged as unknown and ignored, so
+start again from `lucent --default-config`. v1 installed its D-Bus file as
+`org.freedesktop.Notifications.service`; the package replaces it with
+`dev.cptdawn.Lucent.service`, but if you installed v1 by hand, delete the old
+one (after checking it says `Exec=/usr/bin/lucent`):
+
+```sh
+sudo rm /usr/share/dbus-1/services/org.freedesktop.Notifications.service
+```
+
+**Is there a history, do-not-disturb or a control centre?** No. A process
+that isn't running can't remember anything, and that is the point. If you
+need those, swaync is excellent.
+
+**GNOME or X11?** No. Lucent needs the layer-shell protocol, which wlroots
+compositors, Hyprland, niri and KDE Plasma provide.
+
+## Building from source
+
+You need Rust 1.92 or newer and the development files for Cairo, Pango and
+D-Bus (Debian and Ubuntu: `libcairo2-dev libpango1.0-dev libdbus-1-dev
+pkg-config`).
+
+```sh
 git clone https://github.com/CPT-Dawn/Lucent.git
 cd Lucent
 cargo build --release --locked
-```
-
-Install binary and D-Bus service file:
-
-```bash
 sudo install -Dm755 target/release/lucent /usr/bin/lucent
-sudo install -Dm644 org.freedesktop.Notifications.service \
-  /usr/share/dbus-1/services/org.freedesktop.Notifications.service
+sudo install -Dm644 dev.cptdawn.Lucent.service \
+  /usr/share/dbus-1/services/dev.cptdawn.Lucent.service
 ```
 
-> [!WARNING]
-> If `org.freedesktop.Notifications.service` is not installed in a D-Bus service directory, D-Bus activation will not occur.
-
-## Configuration
-
-Configuration is loaded from XDG config location:
-
-- Primary path: `~/.config/lucent/config.toml`
-- Source of defaults: embedded `default_config.toml` written automatically on first run
-
-Reference configuration:
-
-```toml
-# Lucent configuration
-# Location: ~/.config/lucent/config.toml
-
-# Width of each notification popup in pixels.
-width = 350
-
-# Default auto-dismiss timeout in seconds.
-timeout_seconds = 5
-
-# Window background color (hex, optional alpha).
-background_color = "#0D0B14E6"
-
-# Border color (hex).
-border_color = "#1A1525"
-
-# Border width in px (0 disables border).
-border_width = 1
-
-# Text color (hex).
-text_color = "#E8E2F0"
-
-# Corner radius in pixels.
-corner_radius = 12
-
-# Font family used for title/body text.
-font_family = "Geist"
-
-# Max visible notifications before queueing.
-max_visible_notifications = 5
-```
-
-## Blur And Borderless Popups (Hyprland + Wayland)
-
-Lucent renders translucent GTK layer-shell windows. The actual blur effect is
-provided by your Wayland compositor, not by Lucent itself.
-
-### 1) Tune Lucent for blur-friendly visuals
-
-Set these values in `~/.config/lucent/config.toml`:
-
-```toml
-# Keep alpha in background color (last 2 hex digits), e.g. E6 = 90% opacity.
-background_color = "#0D0B14E6"
-
-# Remove sharp outline for a cleaner blurred card look.
-border_width = 0
-```
-
-If your popup looks too opaque, reduce alpha (for example `CC` instead of `E6`).
-
-### 2) Hyprland configuration
-
-In your Hyprland config (`~/.config/hypr/hyprland.conf`), ensure blur is enabled
-and apply layer rules to Lucent's namespace (`lucent-notification`):
-
-```ini
-decoration {
-  blur {
-    enabled = true
-    size = 8
-    passes = 3
-    ignore_opacity = false
-  }
-}
-
-layerrule = blur, lucent-notification
-layerrule = ignorealpha 0.15, lucent-notification
-```
-
-Then reload Hyprland:
-
-```bash
-hyprctl reload
-```
-
-### 3) Other Wayland compositors
-
-Use your compositor's blur and layer-surface/window rules targeting the
-`lucent-notification` namespace/app class equivalent. Keep Lucent background
-translucent and set `border_width = 0` if you want a fully soft-edge style.
-
-## Usage & IPC
-
-Standard freedesktop clients work without Lucent-specific integration:
-
-```bash
-notify-send "Build completed" "All targets passed"
-```
-
-Raw D-Bus IPC example:
-
-```bash
-dbus-send --session --type=method_call --print-reply \
-  --dest=org.freedesktop.Notifications \
-  /org/freedesktop/Notifications \
-  org.freedesktop.Notifications.Notify \
-  string:"manual-test" uint32:0 string:"" string:"Summary" string:"Body" \
-  array:string:"" dict:string:variant:"" int32:5000
-```
-
-CLI surface:
-
-- `lucent` currently exposes no custom command-line flags.
-- Lifecycle is managed by D-Bus activation, not by daemon control subcommands.
+The service file starts `/usr/bin/lucent`; edit its `Exec=` line if you
+install elsewhere. Without it D-Bus can't start Lucent.
 
 ## Contributing
 
-Pull requests are welcome, but review is strict on correctness and maintainability.
+Issues and pull requests are welcome. Before opening a PR:
 
-Before opening a PR, ensure all of the following are true:
-
-```bash
+```sh
 cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-PR requirements:
-
-- Code is fully formatted with `cargo fmt`.
-- `cargo clippy` passes with zero warnings.
-- Description includes a clear architectural explanation of what changed and why.
+The vocabulary is in [GLOSSARY.md](GLOSSARY.md) and the big decisions are in
+[docs/adr/](docs/adr/). Changes that cost idle memory or wakeups need a very
+good reason.
 
 ## License
 
