@@ -7,4 +7,5 @@ pub mod dbus;
 pub mod draw;
 pub mod log;
 pub mod markup;
+pub mod theme;
 pub mod wayland;

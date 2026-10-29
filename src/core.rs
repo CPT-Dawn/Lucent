@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{ClickAction, Config};
 use crate::markup;
+use crate::theme::Theme;
 
 /// A Notification as an application asked for it, already stripped of any
 /// transport types.
@@ -21,6 +22,7 @@ pub struct Notification {
     /// any id that matches nothing) asks for a fresh one.
     pub replaces_id: u32,
     pub actions: Vec<Action>,
+    /// Decides the Urgency style of the Popup's Theme, and whether it expires.
     pub urgency: Urgency,
     /// How long the sender asked for the Popup to stay up.
     pub timeout: Timeout,
@@ -102,6 +104,8 @@ pub struct Popup {
     pub body_lines: u32,
     /// How long the Popup stays up once shown; `None` until closed.
     pub expire: Option<Duration>,
+    /// The Theme to draw this Popup with, resolved for its Urgency.
+    pub theme: Theme,
 }
 
 /// Why a Notification closed, as numbered by the freedesktop spec.
@@ -254,6 +258,7 @@ impl Core {
             more: 0,
             body_lines: self.config.general.body_lines,
             expire,
+            theme: self.theme(n.urgency),
         };
         if self.stack.len() >= self.max_visible {
             self.queue.push_back(popup);
@@ -282,11 +287,13 @@ impl Core {
     fn replace(&mut self, n: &Notification) -> Option<Vec<Effect>> {
         let id = n.replaces_id;
         let expire = self.expiry(n);
+        let theme = self.theme(n.urgency);
         let update = |p: &mut Popup| {
             p.app_name.clone_from(&n.app_name);
             p.summary.clone_from(&n.summary);
             p.body = markup::clean(&n.body);
             p.expire = expire;
+            p.theme.clone_from(&theme);
         };
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
             update(popup);
@@ -437,6 +444,11 @@ impl Core {
             self.stack.insert(0, popup);
         }
         effects
+    }
+
+    /// The Theme for a Notification of `urgency`.
+    fn theme(&self, urgency: Urgency) -> Theme {
+        self.config.theme().for_urgency(urgency)
     }
 
     /// The Stack as the renderer should show it, "+N more" on the last slot.

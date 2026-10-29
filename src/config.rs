@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
+use crate::theme::{Theme, ThemeOverride};
 use crate::{debug, error};
 
 /// The fully commented reference config printed by `lucent --default-config`.
@@ -25,6 +26,9 @@ pub const REFERENCE: &str = include_str!("../default_config.toml");
 pub struct Config {
     pub general: General,
     pub layout: Layout,
+    /// `[theme]`: a Preset (Midnight Bloom if unset) and any Theme field
+    /// set on top of it.
+    pub theme: ThemeOverride,
 }
 
 /// `[general]`
@@ -152,6 +156,9 @@ pub enum Problem {
     Invalid(String),
     /// A key Lucent does not know, as a dotted path; it is skipped.
     UnknownKey(String),
+    /// `[theme] preset` names no Preset; Midnight Bloom stands in, with the
+    /// `[theme]` overrides still applied.
+    UnknownPreset(String),
 }
 
 impl std::fmt::Display for Problem {
@@ -159,11 +166,26 @@ impl std::fmt::Display for Problem {
         match self {
             Self::Invalid(e) => write!(f, "invalid config, using the defaults: {e}"),
             Self::UnknownKey(key) => write!(f, "unknown config key `{key}` ignored"),
+            Self::UnknownPreset(name) => {
+                let known: Vec<_> = Theme::PRESETS.iter().map(|(n, _)| *n).collect();
+                write!(
+                    f,
+                    "unknown theme preset `{name}`, using midnight-bloom (have: {})",
+                    known.join(", ")
+                )
+            }
         }
     }
 }
 
 impl Config {
+    /// The Theme `[theme]` resolves to, before any Urgency style.
+    pub fn theme(&self) -> Theme {
+        let mut theme = Theme::default();
+        self.theme.apply(&mut theme);
+        theme
+    }
+
     /// Resolves config text against the defaults. Never fails: anything
     /// unusable is reported and the defaults stand in.
     pub fn parse(text: &str) -> (Config, Vec<Problem>) {
@@ -172,11 +194,15 @@ impl Config {
             Ok(de) => de,
             Err(e) => return (Config::default(), vec![Problem::Invalid(e.to_string())]),
         };
-        match serde_ignored::deserialize(de, |path| unknown.push(path.to_string())) {
-            Ok(config) => (
-                config,
-                unknown.into_iter().map(Problem::UnknownKey).collect(),
-            ),
+        match serde_ignored::deserialize::<_, _, Config>(de, |path| unknown.push(path.to_string()))
+        {
+            Ok(config) => {
+                let mut problems: Vec<_> = unknown.into_iter().map(Problem::UnknownKey).collect();
+                if let Some(name) = config.theme.unknown_preset() {
+                    problems.push(Problem::UnknownPreset(name.into()));
+                }
+                (config, problems)
+            }
             Err(e) => (Config::default(), vec![Problem::Invalid(e.to_string())]),
         }
     }
