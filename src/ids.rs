@@ -4,6 +4,10 @@
 //! an old id could replace or close an unrelated Notification. The id lives
 //! in `$XDG_RUNTIME_DIR/lucent/last-id`: tmpfs, private to the user, and
 //! gone at logout, when no client can hold an old id any more.
+//!
+//! Only the process owning the bus name hands out ids, and it saves each one
+//! before replying, so before any successor can start: the file needs no
+//! lock. An exiting Lucent forwards late Notifys rather than numbering them.
 
 use std::path::PathBuf;
 

@@ -297,10 +297,8 @@ impl Core {
         self
     }
 
-    /// Whether the Stack and Queue are both empty. After [`Effect::Exit`] the
-    /// adapters drain calls already on their way and exit only if this still
-    /// holds.
-    pub fn is_idle(&self) -> bool {
+    /// Whether the Stack and Queue are both empty.
+    fn is_idle(&self) -> bool {
         self.stack.is_empty() && self.queue.is_empty()
     }
 

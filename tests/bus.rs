@@ -1,6 +1,7 @@
 //! Seam 2: the D-Bus adapter. Runs the real binary on a private `dbus-daemon`
 //! with drawing switched off and talks to it like an application would.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -45,6 +46,11 @@ impl Bus {
     /// A private session bus that starts Lucent by D-Bus activation, the way
     /// a desktop session does, with drawing off and `config` as its config.
     fn activating(config: &str) -> Bus {
+        Bus::activating_with(config, &[])
+    }
+
+    /// As [`Bus::activating`], with `env` set for every Lucent it starts.
+    fn activating_with(config: &str, env: &[(&str, &str)]) -> Bus {
         let config_home = tempfile::tempdir().unwrap();
         let runtime_dir = tempfile::tempdir().unwrap();
         let lucent_config = config_home.path().join("lucent");
@@ -86,6 +92,7 @@ impl Bus {
 
         // Activated services inherit the daemon's environment.
         let mut daemon = Command::new("dbus-daemon")
+            .envs(env.iter().copied())
             .arg(format!("--config-file={}", bus_config.display()))
             .args(["--nofork", "--nopidfile", "--print-address=1"])
             .env("LUCENT_NO_DRAW", "1")
@@ -550,14 +557,20 @@ fn ids_keep_increasing_across_restarts() {
 
 #[test]
 fn notifications_sent_while_lucent_shuts_down_are_answered_or_reactivate_it() {
-    // Popups vanish within a millisecond and Lucent exits right after, so a stream of
-    // Notifications, sent at a sweep of delays, keeps landing on a Lucent
-    // that is in the middle of shutting down.
+    // Popups vanish within a millisecond and Lucent exits right after, so a
+    // stream of Notifications, sent at a sweep of delays, keeps landing on a
+    // Lucent that is in the middle of shutting down.
     let bus = Bus::activating("[general]\ntimeout = 1\nidle_grace = 0\n");
     let client = bus.client();
-    let rule = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged")
+    let owner_changes = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged")
         .with_sender("org.freedesktop.DBus");
-    client.add_match_no_cb(&rule.match_str()).unwrap();
+    client.add_match_no_cb(&owner_changes.match_str()).unwrap();
+    // As libnotify does: only signals from whoever owns the name count, so a
+    // Lucent that served a Notification without owning it goes unheard.
+    let closed_by_owner = MatchRule::new_signal(NAME, "NotificationClosed").with_sender(NAME);
+    client
+        .add_match_no_cb(&closed_by_owner.match_str())
+        .unwrap();
 
     let mut ids = Vec::new();
     // The window is narrow, so this catches a regression often, not always.
@@ -568,13 +581,30 @@ fn notifications_sent_while_lucent_shuts_down_are_answered_or_reactivate_it() {
     }
 
     let mut activations = 0;
-    while let Some(msg) = client.channel().pop_message() {
-        if msg.member().as_deref() == Some("NameOwnerChanged")
-            && let Ok((name, _, new)) = msg.read3::<String, String, String>()
-            && name == NAME
-            && !new.is_empty()
-        {
-            activations += 1;
+    let mut closed: HashMap<u32, Vec<u32>> = HashMap::new();
+    let start = Instant::now();
+    while closed.len() < ids.len() && start.elapsed() < Duration::from_secs(3) {
+        let Some(msg) = client
+            .channel()
+            .blocking_pop_message(Duration::from_millis(50))
+            .unwrap()
+        else {
+            continue;
+        };
+        match msg.member().as_deref() {
+            Some("NameOwnerChanged") => {
+                if let Ok((name, _, new)) = msg.read3::<String, String, String>()
+                    && name == NAME
+                    && !new.is_empty()
+                {
+                    activations += 1;
+                }
+            }
+            Some("NotificationClosed") => {
+                let (id, reason) = msg.read2::<u32, u32>().unwrap();
+                closed.entry(id).or_default().push(reason);
+            }
+            _ => {}
         }
     }
     assert!(
@@ -585,6 +615,88 @@ fn notifications_sent_while_lucent_shuts_down_are_answered_or_reactivate_it() {
         activations > 1,
         "Lucent should have exited and been reactivated along the way"
     );
+    let unheard: Vec<_> = ids.iter().filter(|id| !closed.contains_key(id)).collect();
+    assert_eq!(
+        unheard,
+        [] as [&u32; 0],
+        "no Closed signal from the name owner"
+    );
+    assert!(
+        closed.values().all(|reasons| reasons == &[1]),
+        "each must expire exactly once: {closed:?}"
+    );
+}
+
+/// Sends a Notify without waiting for the reply, and returns its serial.
+#[cfg(feature = "test-hooks")]
+fn send_notify(client: &Connection, summary: &str) -> u32 {
+    let msg = dbus::Message::new_method_call(NAME, PATH, NAME, "Notify")
+        .unwrap()
+        .append3("test-app", 0u32, "")
+        .append3(summary, "", Vec::<String>::new())
+        .append2(PropMap::new(), -1i32);
+    client.channel().send(msg).unwrap()
+}
+
+#[test]
+#[cfg(feature = "test-hooks")]
+fn a_notification_caught_by_an_exiting_lucent_is_handed_to_the_new_one() {
+    // Each exiting Lucent pauses 400 ms before giving up the name and 400 ms
+    // after, so a Notify can land in each half on purpose.
+    let bus = Bus::activating_with(
+        "[general]\ntimeout = 1\nidle_grace = 0\n",
+        &[("LUCENT_TEST_EXIT_PAUSE_MS", "400")],
+    );
+    let client = bus.client();
+    let closed_by_owner = MatchRule::new_signal(NAME, "NotificationClosed").with_sender(NAME);
+    client
+        .add_match_no_cb(&closed_by_owner.match_str())
+        .unwrap();
+
+    // Expires at once, so this Lucent starts exiting.
+    let first = notify(&client, "first", "");
+    std::thread::sleep(Duration::from_millis(200));
+    // Still owned: this one queues up in the exiting Lucent.
+    let late = send_notify(&client, "late");
+    std::thread::sleep(Duration::from_millis(400));
+    // Released now: this one starts a new Lucent, which takes the name.
+    let fresh = notify(&client, "fresh", "");
+
+    let mut late_id = None;
+    let mut closed: HashMap<u32, Vec<u32>> = HashMap::new();
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(3) {
+        let Some(msg) = client
+            .channel()
+            .blocking_pop_message(Duration::from_millis(50))
+            .unwrap()
+        else {
+            continue;
+        };
+        if msg.get_reply_serial() == Some(late) {
+            late_id = Some(msg.read1::<u32>().expect("the late Notify is answered"));
+        } else if msg.member().as_deref() == Some("NotificationClosed") {
+            let (id, reason) = msg.read2::<u32, u32>().unwrap();
+            closed.entry(id).or_default().push(reason);
+        }
+    }
+
+    let late_id = late_id.expect("the late Notify must be answered");
+    let mut ids = vec![first, late_id, fresh];
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        3,
+        "ids must be unique: {first}, {late_id}, {fresh}"
+    );
+    for id in [first, late_id, fresh] {
+        assert_eq!(
+            closed.get(&id).map(Vec::as_slice),
+            Some(&[1][..]),
+            "{id} must expire exactly once, heard from the name owner: {closed:?}"
+        );
+    }
 }
 
 #[test]

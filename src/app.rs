@@ -61,14 +61,12 @@ const NO_DRAW: &str = "LUCENT_NO_DRAW";
 
 pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
     let no_draw = std::env::var_os(NO_DRAW).is_some();
-    let dbus = DbusAdapter::connect()?;
+    let mut dbus = DbusAdapter::connect()?;
     // No pointer without a compositor: let the bus tests click instead.
     #[cfg(feature = "test-hooks")]
-    let dbus = if no_draw {
-        dbus.with_test_hooks()
-    } else {
-        dbus
-    };
+    if no_draw {
+        dbus.enable_test_hooks();
+    }
     if let Err(owner) = dbus.acquire_name()? {
         error!(
             "{} is already owned by {owner}; stop it to use Lucent",
@@ -136,6 +134,18 @@ pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
     Ok(Exit::Done)
 }
 
+/// With the `test-hooks` feature, sleeps for `LUCENT_TEST_EXIT_PAUSE_MS`, so
+/// the bus tests can send a Notify on either side of the name's release.
+fn test_exit_pause() {
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::env::var("LUCENT_TEST_EXIT_PAUSE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
 impl App {
     fn serve_dbus(&mut self) {
         let Self {
@@ -163,24 +173,26 @@ impl App {
         }
     }
 
-    /// Releases the bus name and exits, unless a Notification sent before the
-    /// release turns up while draining: that one is shown, not lost.
+    /// Releases the bus name, answers what was already routed here, and
+    /// exits.
+    ///
+    /// A Notify sent before the release can still be waiting. It is handed
+    /// to the name's next owner rather than shown here, so no Notification
+    /// is lost, none lives in a process whose signals clients ignore, and
+    /// only the name owner ever hands out ids (ADR-0002).
     fn idle_exit(&mut self) {
-        if let Err(e) = self.dbus.release_name() {
-            error!("could not release {}: {e}", dbus::NAME);
-        }
-        // From here on the bus starts a new Lucent for new calls; anything
-        // already routed here is answered first.
+        test_exit_pause();
+        let released = self.dbus.release_name();
+        test_exit_pause();
         self.serve_dbus();
-        if self.core.is_idle() {
-            debug!("idle; exiting");
-            self.exit = true;
-            return;
-        }
-        match self.dbus.acquire_name() {
-            Ok(Ok(())) => debug!("a late Notification arrived; staying"),
-            // Another Lucent was activated meanwhile; finish what is shown.
-            _ => debug!("a late Notification arrived; serving it without the name"),
+        match released {
+            Ok(()) => {
+                debug!("idle; exiting");
+                self.exit = true;
+            }
+            // Still the owner, so anything late was shown here: stay, and
+            // try again once idle.
+            Err(e) => error!("could not release {}, staying: {e}", dbus::NAME),
         }
     }
 

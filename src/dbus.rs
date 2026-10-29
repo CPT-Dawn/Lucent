@@ -19,15 +19,15 @@ use dbus::channel::{BusType, Channel};
 use dbus::message::MessageType;
 
 use crate::core::{Action, CloseReason, Effect, Event, Notification, Timeout, Urgency};
-use crate::debug;
 use crate::image::{Image, Pixels, RawPixels};
+use crate::{debug, error};
 
 pub const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 
 /// Stands in for the pointer while drawing is off, so the bus tests can click
 /// a Popup that is never shown. Compiled in only with the `test-hooks`
-/// feature, and served only after [`DbusAdapter::with_test_hooks`].
+/// feature, and served only after [`DbusAdapter::enable_test_hooks`].
 #[cfg(feature = "test-hooks")]
 const TEST_INTERFACE: &str = "dev.cptdawn.Lucent.Test";
 
@@ -40,12 +40,19 @@ const CAPABILITIES: [&str; 5] = [
     "icon-static",
 ];
 
+/// How long a handed-off Notify may take, D-Bus activation of the new
+/// Lucent included: libdbus's own default call timeout.
+const HAND_OFF_TIMEOUT: Duration = Duration::from_secs(25);
+
 /// The session bus went away; nothing more can be served.
 #[derive(Debug)]
 pub struct Disconnected;
 
 pub struct DbusAdapter {
     conn: Connection,
+    /// Whether this process holds [`NAME`]. Once it has let go, a Notify
+    /// still routed here is handed to the new owner instead of shown here.
+    owns_name: bool,
     #[cfg(feature = "test-hooks")]
     test_hooks: bool,
 }
@@ -58,6 +65,7 @@ impl DbusAdapter {
         channel.set_watch_enabled(true);
         Ok(Self {
             conn: Connection::from(channel),
+            owns_name: false,
             #[cfg(feature = "test-hooks")]
             test_hooks: false,
         })
@@ -67,16 +75,18 @@ impl DbusAdapter {
     /// `middle` or `right` acts as a pointer press on that Popup, and
     /// `InvokeAction(u id, s key)` as a press on its Action `key`.
     #[cfg(feature = "test-hooks")]
-    pub fn with_test_hooks(mut self) -> Self {
+    pub fn enable_test_hooks(&mut self) {
         self.test_hooks = true;
-        self
     }
 
     /// Claims the well-known name. `Ok(Err(owner))` describes the process that
     /// already holds it.
-    pub fn acquire_name(&self) -> Result<Result<(), String>, dbus::Error> {
+    pub fn acquire_name(&mut self) -> Result<Result<(), String>, dbus::Error> {
         match self.conn.request_name(NAME, false, false, true)? {
-            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(Ok(())),
+            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => {
+                self.owns_name = true;
+                Ok(Ok(()))
+            }
             _ => Ok(Err(self
                 .owner_description()
                 .unwrap_or_else(|| "an unknown process".into()))),
@@ -102,9 +112,12 @@ impl DbusAdapter {
 
     /// Gives up the well-known name, so the bus activates a fresh Lucent for
     /// the next call. Calls the bus routed here before the release may still
-    /// be queued: [`Self::process`] them before exiting.
-    pub fn release_name(&self) -> Result<(), dbus::Error> {
-        self.conn.release_name(NAME).map(drop)
+    /// be queued: [`Self::process`] them before exiting. Any Notify among
+    /// them is handed to the new owner, never shown by this process.
+    pub fn release_name(&mut self) -> Result<(), dbus::Error> {
+        self.conn.release_name(NAME)?;
+        self.owns_name = false;
+        Ok(())
     }
 
     /// The connection's fd, to be polled for readability. libdbus owns it.
@@ -167,6 +180,7 @@ impl DbusAdapter {
                 .method_return()
                 .append2("Lucent", "CPT-Dawn")
                 .append2(env!("CARGO_PKG_VERSION"), "1.3"),
+            Some("Notify") if !self.owns_name => self.hand_off(msg),
             Some("Notify") => match parse_notify(msg) {
                 Ok(n) => {
                     let mut id = 0;
@@ -194,6 +208,35 @@ impl DbusAdapter {
                 ),
             },
             _ => unknown_method(msg),
+        }
+    }
+
+    /// Passes a Notify that reached this process after it let go of the name
+    /// on to the name's new owner (D-Bus starts one if need be), and answers
+    /// with that owner's reply. The Notification then lives where its id was
+    /// handed out and its signals come from the name owner, as clients expect.
+    fn hand_off(&self, msg: &Message) -> Message {
+        debug!("handing a late Notify to the new owner of {NAME}");
+        let forwarded = Message::new_method_call(NAME, PATH, NAME, "Notify")
+            .map(|mut m| {
+                m.append_items(&msg.get_items());
+                m
+            })
+            .map_err(|e| dbus::Error::new_failed(&e));
+        let reply = forwarded.and_then(|m| {
+            self.conn
+                .channel()
+                .send_with_reply_and_block(m, HAND_OFF_TIMEOUT)
+        });
+        match reply.and_then(|r| r.read1::<u32>().map_err(dbus::Error::from)) {
+            Ok(id) => msg.method_return().append1(id),
+            Err(e) => {
+                error!("could not hand a Notify to the new {NAME}: {e}");
+                msg.error(
+                    &"org.freedesktop.DBus.Error.Failed".into(),
+                    &CString::new(e.to_string()).unwrap_or_default(),
+                )
+            }
         }
     }
 
