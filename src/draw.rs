@@ -54,6 +54,11 @@ const ACTION_WASH: u8 = 12;
 const PHOTO_ROUNDING: f64 = 0.225;
 
 /// The text blocks of a Popup, top to bottom, with their colours.
+///
+/// Only two weights are used, regular and the summary's semibold: Pango
+/// loads each weight of a font as its own face, with its own shaping tables
+/// and glyph cache, and a third costs about 1.5 MiB while a Popup shows.
+/// Colour and size set the rest of the hierarchy apart.
 fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, Rgba)> {
     let theme = &popup.theme;
     let padding = f64::from(theme.padding);
@@ -74,7 +79,7 @@ fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, R
 
     let mut blocks = Vec::with_capacity(4);
     if !popup.app_name.is_empty() {
-        let layout = block("Medium", theme.app_name_size, 1);
+        let layout = block("", theme.app_name_size, 1);
         layout.set_text(&popup.app_name);
         limit_lines(&layout, 1);
         blocks.push((layout, theme.app_name));
@@ -367,7 +372,7 @@ pub fn paint(
         // One line, centred, cut with an ellipsis when it does not fit.
         let label = Layout::new(&labels);
         label.set_font_description(Some(&FontDescription::from_string(&format!(
-            "{} Medium {}",
+            "{} {}",
             theme.font, theme.app_name_size
         ))));
         let label_width = (rect.width - 2.0 * ACTION_PADDING).max(0.0);
