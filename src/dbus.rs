@@ -145,6 +145,16 @@ impl DbusAdapter {
                     &CString::new(e.to_string()).unwrap_or_default(),
                 ),
             },
+            Some("CloseNotification") => match msg.read1::<u32>() {
+                Ok(id) => {
+                    pending.extend(handle(Event::Close(id)));
+                    msg.method_return()
+                }
+                Err(e) => msg.error(
+                    &"org.freedesktop.DBus.Error.InvalidArgs".into(),
+                    &CString::new(e.to_string()).unwrap_or_default(),
+                ),
+            },
             _ => unknown_method(msg),
         }
     }

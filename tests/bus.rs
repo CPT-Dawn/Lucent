@@ -102,13 +102,17 @@ fn notifications(client: &Connection) -> Proxy<'_, &Connection> {
 }
 
 fn notify(client: &Connection, summary: &str, body: &str) -> u32 {
+    notify_replacing(client, 0, summary, body)
+}
+
+fn notify_replacing(client: &Connection, replaces_id: u32, summary: &str, body: &str) -> u32 {
     let (id,): (u32,) = notifications(client)
         .method_call(
             NAME,
             "Notify",
             (
                 "test-app",
-                0u32,
+                replaces_id,
                 "",
                 summary,
                 body,
@@ -253,4 +257,58 @@ fn logs_only_errors_by_default_and_everything_with_lucent_log_debug() {
             assert!(stderr.is_empty(), "default log should be quiet: {stderr}");
         }
     }
+}
+
+fn close_notification(client: &Connection, id: u32) {
+    let () = notifications(client)
+        .method_call(NAME, "CloseNotification", (id,))
+        .unwrap();
+}
+
+fn listen_for_closed(client: &Connection) {
+    client
+        .add_match_no_cb(&MatchRule::new_signal(NAME, "NotificationClosed").match_str())
+        .unwrap();
+}
+
+#[test]
+fn close_notification_emits_exactly_one_closed_signal_with_reason_3() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+    listen_for_closed(&client);
+
+    let id = notify(&client, "Hello", "World");
+    close_notification(&client, id);
+
+    // Listen well past the default timeout: the expiry must not fire too.
+    let closed = closed_signals_until(&client, Instant::now(), Duration::from_millis(6000));
+    let signals: Vec<_> = closed.iter().map(|(signal, _)| *signal).collect();
+    assert_eq!(signals, [(id, 3)], "reason 3 means closed by a call");
+}
+
+#[test]
+fn closing_an_unknown_id_emits_nothing() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+    listen_for_closed(&client);
+
+    close_notification(&client, 4242);
+
+    let closed = closed_signals_until(&client, Instant::now(), Duration::from_millis(500));
+    assert_eq!(closed, []);
+}
+
+#[test]
+fn a_replacement_keeps_the_id_and_an_unknown_replaces_id_gets_a_fresh_one() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+
+    let id = notify(&client, "volume", "40%");
+    assert_eq!(notify_replacing(&client, id, "volume", "45%"), id);
+
+    let fresh = notify_replacing(&client, 4242, "stranger", "hi");
+    assert!(fresh != id && fresh != 4242, "got {fresh}");
 }
