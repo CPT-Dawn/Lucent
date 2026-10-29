@@ -14,7 +14,8 @@
 [general]
 
 # How long a Popup stays on screen, in milliseconds, unless the app asks for
-# its own timeout (see `honor_app_timeouts`).
+# its own timeout (see `honor_app_timeouts`). 0 keeps Popups up until they
+# are clicked or closed, as an app's own timeout of 0 does.
 timeout = 5000
 
 # The most Popups shown at once. Further Notifications wait their turn and
@@ -159,7 +160,8 @@ left = 16
 # are applied after it: to recolour critical Notifications, set `critical`.
 #
 # `timeout`, in milliseconds, replaces both [general] `timeout` and the app's
-# own request. Critical Notifications still never expire.
+# own request; 0 means never expire. Critical Notifications still never
+# expire.
 #
 # Lucent ships with no Rules. For example:
 #

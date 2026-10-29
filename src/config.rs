@@ -44,9 +44,9 @@ pub struct Rule {
     pub app_name: Option<String>,
     /// Matches this Urgency.
     pub urgency: Option<Urgency>,
-    /// How long matching Popups stay up, in milliseconds in the file. It
-    /// replaces both `[general] timeout` and the app's request; critical
-    /// Notifications still never expire.
+    /// How long matching Popups stay up, in milliseconds in the file; 0
+    /// means never expire. It replaces both `[general] timeout` and the
+    /// app's request; critical Notifications still never expire.
     #[serde(deserialize_with = "some_millis")]
     pub timeout: Option<Duration>,
     /// Theme fields (or a Preset) set on top of `[theme]` and earlier Rules.
@@ -67,7 +67,8 @@ impl Rule {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct General {
-    /// How long a Popup stays up, in milliseconds in the file.
+    /// How long a Popup stays up, in milliseconds in the file; 0 means
+    /// never expire.
     #[serde(deserialize_with = "millis")]
     pub timeout: Duration,
     /// The most Popups in the Stack; the rest wait in the Queue.

@@ -119,3 +119,21 @@ fn with_app_timeouts_ignored_the_configured_timeout_is_used() {
         []
     );
 }
+
+#[test]
+fn a_configured_timeout_of_zero_means_never_expire() {
+    for text in [
+        "[general]\ntimeout = 0",
+        "[general]\ntimeout = 0\nhonor_app_timeouts = false",
+        "[[rule]]\ntimeout = 0",
+    ] {
+        let (config, problems) = Config::parse(text);
+        assert_eq!(problems, []);
+        let mut core = Core::with_config(config);
+
+        let timers = notify(&mut core, sent(Urgency::Normal, Timeout::Default));
+
+        assert_eq!(timers, [], "{text:?}");
+        assert!(core.handle(Event::TimerFired(1)).is_empty(), "{text:?}");
+    }
+}

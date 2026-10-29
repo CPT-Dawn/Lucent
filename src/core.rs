@@ -384,17 +384,19 @@ impl Core {
 
     /// How long a Notification stays up once shown: never for critical ones,
     /// otherwise a matching Rule's timeout, else what the sender asked unless
-    /// the config says to ignore it.
+    /// the config says to ignore it. A configured timeout of zero means
+    /// never, as `expire_timeout = 0` does in the spec.
     fn expiry(&self, n: &Notification) -> Option<Duration> {
         let general = &self.config.general;
         let rule = self.config.rule_timeout(n);
-        match (n.urgency, n.timeout) {
-            (Urgency::Critical, _) => None,
+        let configured = match (n.urgency, n.timeout) {
+            (Urgency::Critical, _) => return None,
             _ if rule.is_some() => rule,
-            (_, Timeout::Never) if general.honor_app_timeouts => None,
-            (_, Timeout::After(after)) if general.honor_app_timeouts => Some(after),
+            (_, Timeout::Never) if general.honor_app_timeouts => return None,
+            (_, Timeout::After(after)) if general.honor_app_timeouts => return Some(after),
             _ => Some(general.timeout),
-        }
+        };
+        configured.filter(|t| !t.is_zero())
     }
 
     /// Updates the live Notification `n` replaces without moving it, or

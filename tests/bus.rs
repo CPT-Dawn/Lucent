@@ -550,10 +550,10 @@ fn ids_keep_increasing_across_restarts() {
 
 #[test]
 fn notifications_sent_while_lucent_shuts_down_are_answered_or_reactivate_it() {
-    // Popups vanish at once and Lucent exits right after, so a stream of
+    // Popups vanish within a millisecond and Lucent exits right after, so a stream of
     // Notifications, sent at a sweep of delays, keeps landing on a Lucent
     // that is in the middle of shutting down.
-    let bus = Bus::activating("[general]\ntimeout = 0\nidle_grace = 0\n");
+    let bus = Bus::activating("[general]\ntimeout = 1\nidle_grace = 0\n");
     let client = bus.client();
     let rule = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged")
         .with_sender("org.freedesktop.DBus");
