@@ -13,12 +13,21 @@
 
 [general]
 
-# How long a Popup stays on screen, in milliseconds.
+# How long a Popup stays on screen, in milliseconds, unless the app asks for
+# its own timeout (see `honor_app_timeouts`).
 timeout = 5000
 
 # The most Popups shown at once. Further Notifications wait their turn and
 # appear as earlier ones close.
 max_visible = 5
+
+# Whether an app's requested timeout (including "never expire") replaces
+# `timeout` above. Set it to false to use `timeout` for every app. Critical
+# Notifications never expire either way.
+honor_app_timeouts = true
+
+# Body lines shown before the rest is cut with an ellipsis.
+body_lines = 4
 
 
 [layout]

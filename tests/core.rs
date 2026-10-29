@@ -10,7 +10,7 @@ fn hello() -> Notification {
         app_name: "notify-send".into(),
         summary: "Hello".into(),
         body: "World".into(),
-        replaces_id: 0,
+        ..Default::default()
     }
 }
 
@@ -32,6 +32,8 @@ fn notify_shows_a_popup_that_expires_after_the_default_timeout() {
                 summary: "Hello".into(),
                 body: "World".into(),
                 more: 0,
+                body_lines: 4,
+                expire: Some(Duration::from_secs(5)),
             }]),
             Effect::StartTimer {
                 id,

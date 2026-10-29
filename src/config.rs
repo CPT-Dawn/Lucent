@@ -36,6 +36,12 @@ pub struct General {
     pub timeout: Duration,
     /// The most Popups in the Stack; the rest wait in the Queue.
     pub max_visible: usize,
+    /// Whether a sender's requested timeout replaces `timeout`. Critical
+    /// Notifications never expire either way.
+    #[serde(alias = "honour_app_timeouts")]
+    pub honor_app_timeouts: bool,
+    /// Body lines shown before the rest is cut with an ellipsis.
+    pub body_lines: u32,
 }
 
 impl Default for General {
@@ -43,6 +49,8 @@ impl Default for General {
         Self {
             timeout: Duration::from_secs(5),
             max_visible: 5,
+            honor_app_timeouts: true,
+            body_lines: 4,
         }
     }
 }

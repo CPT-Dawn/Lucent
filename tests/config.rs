@@ -10,6 +10,8 @@ fn defaults() -> Config {
         general: General {
             timeout: Duration::from_secs(5),
             max_visible: 5,
+            honor_app_timeouts: true,
+            body_lines: 4,
         },
         layout: Layout {
             anchor: Anchor::TopRight,
@@ -58,6 +60,8 @@ fn a_full_config_sets_every_field() {
         [general]
         timeout = 2500
         max_visible = 3
+        honor_app_timeouts = false
+        body_lines = 2
 
         [layout]
         anchor = "bottom-center"
@@ -79,6 +83,8 @@ fn a_full_config_sets_every_field() {
             general: General {
                 timeout: Duration::from_millis(2500),
                 max_visible: 3,
+                honor_app_timeouts: false,
+                body_lines: 2,
             },
             layout: Layout {
                 anchor: Anchor::BottomCenter,
