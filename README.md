@@ -18,8 +18,10 @@
   compositor about 7 ms after `notify-send` while Lucent is up, and about
   28 ms when it has to start first. Each Popup is drawn once and redrawn only
   when its content or hover state changes.
-- **Good-looking by default.** *Midnight Bloom* is smoked glass with mint
-  accents, made for compositor blur and still readable without it. Two more
+- **Good-looking by default.** *Midnight Bloom* is smoked glass with a touch
+  of mint, made for compositor blur and still readable without it. Blur is
+  requested for you where the compositor supports it, and text is drawn at
+  your monitor's scale, fractional ones included, so it stays sharp. Two more
   Presets, `light` and `opaque`, are one line away.
 
 <table>
@@ -121,12 +123,14 @@ notify-send -u critical -a Power -i battery-caution "Battery low" "5% remaining.
   **Icons** come from your icon theme (PNG or SVG), or from an image the app
   sends (album art, avatars).
 - **Mouse:** left-click runs the Default action and dismisses the Popup,
+  bringing the app's window to the front if it supports activation;
   middle-click dismisses it, right-click dismisses everything. Hovering a
   Popup pauses its timeout. Popups never take keyboard focus.
 - **Stack and Queue:** up to five Popups are shown at once, newest nearest the
   anchor corner. The rest wait in the Queue, shown as "+N more", and appear as
   space frees up. A Notification that replaces another (a volume change, say)
-  updates its Popup in place.
+  updates its Popup in place, even if it reuses an id whose Popup has
+  gone, as `notify-send -r 9999` scripts do.
 
 `lucent --default-config` prints the reference config; that is the only
 command-line option.
