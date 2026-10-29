@@ -383,6 +383,7 @@ impl Wayland {
     }
 
     fn draw(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
+        self.set_blur(index);
         let surface = &self.surfaces[index];
         let (bw, bh) = (
             scaled(surface.width, surface.scale),
@@ -431,9 +432,6 @@ impl Wayland {
             // Only whole scales get here; 0 must never be sent.
             None => wl_surface.set_buffer_scale((surface.scale / UNSCALED).max(1) as i32),
         }
-        self.set_blur(index);
-        let surface = &self.surfaces[index];
-        let wl_surface = surface.layer.wl_surface();
         wl_surface.damage_buffer(0, 0, w, h);
         buffer.attach_to(wl_surface)?;
         surface.layer.commit();
