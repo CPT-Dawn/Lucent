@@ -215,6 +215,9 @@ pub enum Problem {
     /// Preset; Midnight Bloom stands in for it, with the Rule's own Theme
     /// fields still applied.
     UnknownRulePreset { rule: usize, name: String },
+    /// A number outside what Lucent can use, as a dotted key; the nearest
+    /// usable value stands in.
+    OutOfRange { key: String, used: u64 },
 }
 
 impl std::fmt::Display for Problem {
@@ -225,6 +228,9 @@ impl std::fmt::Display for Problem {
             Self::UnknownPreset(name) => {
                 write!(f, "unknown theme preset `{name}`, using midnight-bloom")?;
                 write_presets(f)
+            }
+            Self::OutOfRange { key, used } => {
+                write!(f, "`{key}` is out of range, using {used}")
             }
             Self::UnknownRulePreset { rule, name } => {
                 write!(
@@ -263,7 +269,7 @@ impl Config {
         for rule in self.rules_for(n) {
             rule.theme.apply(&mut theme);
         }
-        theme.for_urgency(n.urgency)
+        theme.bounded().for_urgency(n.urgency)
     }
 
     /// The timeout the last matching Rule sets, if any does.
@@ -286,6 +292,8 @@ impl Config {
                 if let Some(name) = config.theme.unknown_preset() {
                     problems.push(Problem::UnknownPreset(name.into()));
                 }
+                let mut config = config;
+                problems.extend(config.bound());
                 for (i, rule) in config.rules.iter().enumerate() {
                     if let Some(name) = rule.theme.unknown_preset() {
                         problems.push(Problem::UnknownRulePreset {
@@ -298,6 +306,33 @@ impl Config {
             }
             Err(e) => (Config::default(), vec![Problem::Invalid(e.to_string())]),
         }
+    }
+}
+
+impl Config {
+    /// Brings `[general]` and `[layout]` numbers into the ranges Lucent can
+    /// draw (a width of 0 is even a Wayland protocol error), reporting each
+    /// one changed. Theme numbers are bounded as each Theme is resolved.
+    fn bound(&mut self) -> Vec<Problem> {
+        let mut problems = Vec::new();
+        let mut clamp = |key: &str, value: &mut u32, min: u32, max: u32| {
+            if !(min..=max).contains(value) {
+                *value = (*value).clamp(min, max);
+                problems.push(Problem::OutOfRange {
+                    key: key.into(),
+                    used: (*value).into(),
+                });
+            }
+        };
+        let layout = &mut self.layout;
+        clamp("layout.width", &mut layout.width, 64, 4096);
+        clamp("layout.gap", &mut layout.gap, 0, 1024);
+        clamp("layout.margin.top", &mut layout.margin.top, 0, 8192);
+        clamp("layout.margin.right", &mut layout.margin.right, 0, 8192);
+        clamp("layout.margin.bottom", &mut layout.margin.bottom, 0, 8192);
+        clamp("layout.margin.left", &mut layout.margin.left, 0, 8192);
+        clamp("general.body_lines", &mut self.general.body_lines, 1, 100);
+        problems
     }
 }
 

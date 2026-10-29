@@ -30,6 +30,10 @@ pub fn clean(body: &str) -> String {
         let Some(name) = ALLOWED.into_iter().find(|a| *a == tag.name) else {
             continue;
         };
+        // `<b/>` styles nothing; it must not open a tag for the rest.
+        if tag.empty {
+            continue;
+        }
         if !tag.closing {
             open.push(name);
             push_tag(&mut out, name, false);
@@ -77,9 +81,12 @@ fn is_entity(text: &str) -> bool {
         None if num.bytes().all(|b| b.is_ascii_digit()) => num.parse(),
         None => return false,
     };
+    // Only the characters XML allows: GMarkup, and so Pango, rejects the
+    // rest, and the whole body with them.
     code.ok()
-        .filter(|&c| c != 0)
-        .and_then(char::from_u32)
+        .filter(|&c| {
+            matches!(c, 0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF)
+        })
         .is_some()
 }
 
@@ -97,6 +104,8 @@ struct Tag {
     /// Lowercased.
     name: String,
     closing: bool,
+    /// Written `<name/>`, so it holds nothing.
+    empty: bool,
     /// Bytes from `<` to `>` inclusive.
     len: usize,
 }
@@ -130,6 +139,7 @@ impl Tag {
         Some(Tag {
             name: inner[..name_len].to_ascii_lowercase(),
             closing,
+            empty: inner[name_len..name_len + end].trim_end().ends_with('/'),
             len: text.len() - inner.len() + name_len + end + 1,
         })
     }

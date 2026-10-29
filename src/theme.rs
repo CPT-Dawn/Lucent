@@ -278,6 +278,25 @@ impl Theme {
             .map(|(_, make)| make())
     }
 
+    /// This Theme with every size cut to what a Popup can draw, so no
+    /// config, however odd, can overflow a layout or a buffer.
+    pub fn bounded(mut self) -> Self {
+        for size in [
+            &mut self.app_name_size,
+            &mut self.summary_size,
+            &mut self.body_size,
+        ] {
+            *size = (*size).clamp(1, 96);
+        }
+        self.border_width = self.border_width.min(64);
+        self.accent_width = self.accent_width.min(64);
+        self.padding = self.padding.min(256);
+        self.radius = self.radius.min(1024);
+        self.icon_size = self.icon_size.clamp(1, crate::icon::MAX_SIZE);
+        self.low_opacity = self.low_opacity.min(100);
+        self
+    }
+
     /// This Theme as worn by a Notification of `urgency`.
     /// Critical takes a wash of the `critical` colour in its background, a
     /// softened `critical` border, and `critical` accent and progress fill;

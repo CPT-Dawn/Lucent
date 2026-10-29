@@ -31,14 +31,10 @@ const PATH: &str = "/org/freedesktop/Notifications";
 #[cfg(feature = "test-hooks")]
 const TEST_INTERFACE: &str = "dev.cptdawn.Lucent.Test";
 
-/// Capabilities are added only in the change that implements them.
-const CAPABILITIES: [&str; 5] = [
-    "actions",
-    "body",
-    "body-hyperlinks",
-    "body-markup",
-    "icon-static",
-];
+/// Capabilities are added only in the change that implements them. Not
+/// `body-hyperlinks`: links are styled but cannot be clicked, and a sender
+/// told they can hides the address behind the link text.
+const CAPABILITIES: [&str; 4] = ["actions", "body", "body-markup", "icon-static"];
 
 /// How long a handed-off Notify may take, D-Bus activation of the new
 /// Lucent included: libdbus's own default call timeout.
@@ -298,7 +294,7 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
         urgency: urgency(&hints),
         timeout: Timeout::from_millis(timeout),
         // Progress in percent, an int32 by the spec; any integer will do.
-        value: hints.get("value").and_then(|v| v.0.as_i64()),
+        value: hints.get("value").and_then(|v| integer(&*v.0)),
     })
 }
 
@@ -381,9 +377,18 @@ fn decode_pixels(value: &(dyn RefArg + 'static)) -> Option<Pixels> {
 fn urgency(hints: &PropMap) -> Urgency {
     hints
         .get("urgency")
-        .and_then(|v| v.0.as_u64())
+        .and_then(|v| integer(&*v.0))
         .and_then(|u| u8::try_from(u).ok())
         .map_or(Urgency::Normal, Urgency::from_byte)
+}
+
+/// Any D-Bus integer, signed or not, that fits an `i64`. The `dbus` crate's
+/// `as_i64` turns down `u64` and its `as_u64` every signed type, so each
+/// alone misses some senders.
+fn integer(value: &(dyn RefArg + 'static)) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|u| i64::try_from(u).ok()))
 }
 
 fn unknown_method(msg: &Message) -> Message {

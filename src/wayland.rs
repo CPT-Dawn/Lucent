@@ -509,9 +509,27 @@ fn px(value: u32) -> i32 {
 }
 
 impl LayerShellHandler for Wayland {
+    /// The compositor took a Popup's surface away, as it does when its
+    /// monitor goes. The Notification is still live, so it is shown again
+    /// where the compositor now chooses, unless the surface never got as
+    /// far as its first configure: then the compositor refused it outright,
+    /// and asking again would only loop.
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
-        debug!("compositor closed a popup surface");
-        self.surfaces.retain(|s| &s.layer != layer);
+        let Some(index) = self.surfaces.iter().position(|s| &s.layer == layer) else {
+            return;
+        };
+        let stack: Vec<Popup> = self.surfaces.iter().map(|s| s.popup.clone()).collect();
+        let closed = self.surfaces.remove(index);
+        let (id, shown) = (closed.popup.id, closed.configured);
+        drop(closed);
+        // Its Leave may never come now; a paused timeout must run again.
+        self.events.push(Event::HoverEnd(id));
+        if shown {
+            debug!("compositor closed popup {id}; showing it again");
+            self.show(&stack);
+        } else {
+            error!("the compositor refused popup {id}");
+        }
     }
 
     fn configure(

@@ -76,16 +76,19 @@ fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, R
     if !popup.app_name.is_empty() {
         let layout = block("Medium", theme.app_name_size, 1);
         layout.set_text(&popup.app_name);
+        limit_lines(&layout, 1);
         blocks.push((layout, theme.app_name));
     }
     let summary = block("Semi-Bold", theme.summary_size, 2);
     summary.set_text(&popup.summary);
+    limit_lines(&summary, 2);
     blocks.push((summary, theme.summary));
     if !popup.body.is_empty() {
         let lines = i32::try_from(popup.body_lines.max(1)).unwrap_or(i32::MAX);
         let layout = block("", theme.body_size, lines);
         layout.set_spacing(BODY_LEADING * pango::SCALE);
         set_body(&layout, &popup.body, theme.accent);
+        limit_lines(&layout, lines);
         blocks.push((layout, theme.body));
     }
     if popup.more > 0 {
@@ -95,6 +98,23 @@ fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, R
         blocks.push((layout, theme.app_name));
     }
     blocks
+}
+
+/// Cuts `layout` to its first `lines` lines, the last ending in an
+/// ellipsis. Its negative height alone allows that many lines per
+/// paragraph, so every line break in the text would start a fresh allowance.
+fn limit_lines(layout: &Layout, lines: i32) {
+    if layout.line_count() <= lines {
+        return;
+    }
+    let mut iter = layout.iter();
+    for _ in 1..lines {
+        iter.next_line();
+    }
+    let (_, last) = iter.line_extents();
+    // A positive height bounds the whole layout; Pango drops the lines
+    // below it and ellipsizes the last one kept.
+    layout.set_height(last.y() + last.height());
 }
 
 /// Sets a body the core has already cleaned to `b`, `i`, `u` and `a`.

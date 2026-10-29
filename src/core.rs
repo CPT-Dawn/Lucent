@@ -204,6 +204,21 @@ pub enum Effect {
     ActionInvoked { id: u32, key: String },
 }
 
+/// The most bytes of app name, summary and body kept: far more than a
+/// Popup shows, while bounding the work of laying out what a sender sends.
+pub const MAX_APP_NAME: usize = 256;
+pub const MAX_SUMMARY: usize = 1024;
+pub const MAX_BODY: usize = 8 * 1024;
+
+/// `text` cut to at most `max` bytes, on a character boundary.
+fn clip(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
 /// The `value` hint as a percentage, clamped to 0–100.
 fn percent(value: Option<i64>) -> Option<u8> {
     value.map(|v| v.clamp(0, 100) as u8)
@@ -254,6 +269,9 @@ pub struct Core {
     actions: HashMap<u32, Vec<Action>>,
     /// The timeout of every Popup in the Stack.
     timeouts: HashMap<u32, Countdown>,
+    /// The Popup under the pointer, whose timeout must not run, even one
+    /// it gains while hovered.
+    hovered: Option<u32>,
     clock: Clock,
 }
 
@@ -280,6 +298,7 @@ impl Core {
             idle_armed: false,
             actions: HashMap::new(),
             timeouts: HashMap::new(),
+            hovered: None,
             clock: Clock(Box::new(Instant::now)),
         }
     }
@@ -358,9 +377,9 @@ impl Core {
         let theme = self.theme(&n);
         let popup = Popup {
             id,
-            app_name: n.app_name,
-            summary: n.summary,
-            body: markup::clean(&n.body),
+            app_name: clip(&n.app_name, MAX_APP_NAME),
+            summary: clip(&n.summary, MAX_SUMMARY),
+            body: markup::clean(&clip(&n.body, MAX_BODY)),
             image: n.image,
             actions: shown_actions(&n.actions),
             more: 0,
@@ -404,9 +423,9 @@ impl Core {
         let timeout = self.expiry(n);
         let theme = self.theme(n);
         let update = |p: &mut Popup| {
-            p.app_name.clone_from(&n.app_name);
-            p.summary.clone_from(&n.summary);
-            p.body = markup::clean(&n.body);
+            p.app_name = clip(&n.app_name, MAX_APP_NAME);
+            p.summary = clip(&n.summary, MAX_SUMMARY);
+            p.body = markup::clean(&clip(&n.body, MAX_BODY));
             p.image.clone_from(&n.image);
             p.actions = shown_actions(&n.actions);
             p.timeout = timeout;
@@ -495,8 +514,9 @@ impl Core {
             self.timeouts.remove(&id);
             return None;
         };
-        if let Some(Countdown::Paused { remaining }) = self.timeouts.get_mut(&id) {
-            *remaining = after;
+        if self.hovered == Some(id) {
+            self.timeouts
+                .insert(id, Countdown::Paused { remaining: after });
             return None;
         }
         let started = (self.clock.0)();
@@ -506,6 +526,10 @@ impl Core {
     }
 
     fn hover_start(&mut self, id: u32) -> Vec<Effect> {
+        if !self.stack.iter().any(|p| p.id == id) {
+            return vec![];
+        }
+        self.hovered = Some(id);
         let Some(&Countdown::Running { started, after }) = self.timeouts.get(&id) else {
             return vec![];
         };
@@ -516,6 +540,9 @@ impl Core {
     }
 
     fn hover_end(&mut self, id: u32) -> Vec<Effect> {
+        if self.hovered == Some(id) {
+            self.hovered = None;
+        }
         let Some(&Countdown::Paused { remaining }) = self.timeouts.get(&id) else {
             return vec![];
         };
@@ -529,6 +556,7 @@ impl Core {
         let queue = std::mem::take(&mut self.queue);
         self.actions.clear();
         self.timeouts.clear();
+        self.hovered = None;
         let mut effects: Vec<Effect> = stack.iter().map(|p| Effect::CancelTimer(p.id)).collect();
         effects.push(self.stack_effect());
         effects.extend(stack.iter().chain(&queue).map(|p| Effect::Closed {
@@ -554,6 +582,9 @@ impl Core {
         self.queue.retain(|p| p.id != id);
         self.actions.remove(&id);
         self.timeouts.remove(&id);
+        if self.hovered == Some(id) {
+            self.hovered = None;
+        }
         let started = self.promote();
         effects.push(self.stack_effect());
         effects.extend(started);

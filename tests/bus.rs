@@ -231,16 +231,7 @@ fn reports_server_information_and_capabilities_and_accepts_notify() {
     let (caps,): (Vec<String>,) = notifications(&client)
         .method_call(NAME, "GetCapabilities", ())
         .unwrap();
-    assert_eq!(
-        caps,
-        [
-            "actions",
-            "body",
-            "body-hyperlinks",
-            "body-markup",
-            "icon-static"
-        ]
-    );
+    assert_eq!(caps, ["actions", "body", "body-markup", "icon-static"]);
 
     let first = notify(&client, "Hello", "World");
     let second = notify(&client, "Hello", "again");
@@ -840,4 +831,54 @@ fn pressing_an_action_invokes_its_key_then_dismisses() {
             format!("NotificationClosed({id}, 2)"),
         ]
     );
+}
+
+fn notify_hints(client: &Connection, hints: PropMap, timeout: i32) -> Result<u32, dbus::Error> {
+    notifications(client)
+        .method_call(
+            NAME,
+            "Notify",
+            (
+                "test-app",
+                0u32,
+                "",
+                "s",
+                "b",
+                Vec::<String>::new(),
+                hints,
+                timeout,
+            ),
+        )
+        .map(|(id,): (u32,)| id)
+}
+
+#[test]
+fn an_int32_critical_urgency_never_expires() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+    client
+        .add_match_no_cb(&MatchRule::new_signal(NAME, "NotificationClosed").match_str())
+        .unwrap();
+    let mut hints = PropMap::new();
+    hints.insert("urgency".into(), dbus::arg::Variant(Box::new(2i32)));
+    notify_hints(&client, hints, 200).unwrap();
+    let closed = closed_signals_until(&client, Instant::now(), Duration::from_millis(1500));
+    assert!(
+        closed.is_empty(),
+        "a critical (int32 urgency) Notification expired: {closed:?}"
+    );
+}
+
+#[test]
+fn a_64_bit_image_data_hint_does_not_kill_the_daemon() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+    let mut hints = PropMap::new();
+    let image: (i64, i64, i64, bool, i64, i64, Vec<u8>) = (1 << 62, 1, 0, true, 8, 4, vec![]);
+    hints.insert("image-data".into(), dbus::arg::Variant(Box::new(image)));
+    let result = notify_hints(&client, hints, -1);
+    assert!(result.is_ok(), "Notify failed: {result:?}");
+    assert!(name_has_owner(&client, NAME), "Lucent died");
 }

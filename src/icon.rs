@@ -21,6 +21,13 @@ use crate::{debug, xdg};
 /// Image files larger than this are not read at all.
 const MAX_FILE_BYTES: u64 = 16 << 20;
 
+/// PNGs with a longer side than this are not decoded: a small file can
+/// declare a huge image, and decoding allocates all of it at once.
+const MAX_PNG_SIDE: u32 = 4096;
+
+/// The largest icon size honoured, in pixels; a bigger one is cut to it.
+pub const MAX_SIZE: u32 = 1024;
+
 /// The fallback theme every icon theme inherits from.
 const HICOLOR: &str = "hicolor";
 
@@ -54,7 +61,7 @@ impl Icons {
             .into_iter()
             .collect();
         Self {
-            size: size.max(1),
+            size: size.clamp(1, MAX_SIZE),
             scale: 1.0,
             theme,
             search_paths,
@@ -64,7 +71,7 @@ impl Icons {
     /// Loads for a monitor at `scale` (1.0 unless set), in device pixels per
     /// surface pixel.
     pub fn with_scale(mut self, scale: f64) -> Self {
-        if scale.is_finite() && scale > 0.0 {
+        if scale.is_finite() && (0.1..=10.0).contains(&scale) {
             self.scale = scale;
         }
         self
@@ -156,6 +163,9 @@ impl Icons {
         }
         let bytes = std::fs::read(path).map_err(|e| fail(&e))?;
         if bytes.starts_with(b"\x89PNG") {
+            if !png_size_ok(&bytes) {
+                return Err(fail(&format!("larger than {MAX_PNG_SIDE} px a side")));
+            }
             let png =
                 ImageSurface::create_from_png(&mut Cursor::new(bytes)).map_err(|e| fail(&e))?;
             self.fit(&png)
@@ -246,6 +256,22 @@ pub fn extent(icon: &ImageSurface) -> (f64, f64) {
         f64::from(icon.width()) / sx.max(f64::MIN_POSITIVE),
         f64::from(icon.height()) / sy.max(f64::MIN_POSITIVE),
     )
+}
+
+/// Whether the PNG in `bytes` declares, in its `IHDR` chunk, a size
+/// [`MAX_PNG_SIDE`] allows. A header too short to say is left to Cairo,
+/// which rejects it.
+fn png_size_ok(bytes: &[u8]) -> bool {
+    let side = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    // Signature (8), chunk length (4), "IHDR" (4), then width and height.
+    match (side(16), side(20)) {
+        (Some(w), Some(h)) => w <= MAX_PNG_SIDE && h <= MAX_PNG_SIDE,
+        _ => true,
+    }
 }
 
 fn is_svg(path: &Path, bytes: &[u8]) -> bool {
