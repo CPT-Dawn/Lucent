@@ -13,8 +13,8 @@ use std::sync::OnceLock;
 use cairo::{Context, Filter, Format, ImageSurface, SurfacePattern};
 use resvg::{tiny_skia, usvg};
 
-use crate::debug;
 use crate::image::{Image, Pixels};
+use crate::{debug, xdg};
 
 /// Image files larger than this are not read at all.
 const MAX_FILE_BYTES: u64 = 16 << 20;
@@ -209,10 +209,7 @@ fn is_svg(path: &Path, bytes: &[u8]) -> bool {
 
 /// `gtk-icon-theme-name` from `$XDG_CONFIG_HOME/gtk-3.0/settings.ini`.
 fn gtk_icon_theme() -> Option<String> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    let config = xdg::config_home()?;
     let text = std::fs::read_to_string(config.join("gtk-3.0/settings.ini")).ok()?;
     text.lines().find_map(|line| {
         let (key, value) = line.split_once('=')?;

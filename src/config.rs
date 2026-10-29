@@ -16,7 +16,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::core::Urgency;
 use crate::theme::{Theme, ThemeOverride};
-use crate::{debug, error};
+use crate::{debug, error, xdg};
 
 /// The fully commented reference config printed by `lucent --default-config`.
 /// It parses back to [`Config::default`].
@@ -275,11 +275,7 @@ impl Config {
 
 /// `$XDG_CONFIG_HOME/lucent/config.toml`, falling back to `~/.config`.
 pub fn path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(base.join("lucent").join("config.toml"))
+    Some(xdg::config_home()?.join("lucent").join("config.toml"))
 }
 
 /// Reads the user's config, logging every problem. A missing file is not a

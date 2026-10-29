@@ -12,3 +12,4 @@ pub mod log;
 pub mod markup;
 pub mod theme;
 pub mod wayland;
+pub mod xdg;
