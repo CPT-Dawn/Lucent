@@ -25,6 +25,7 @@ pub const REFERENCE: &str = include_str!("../default_config.toml");
 pub struct Config {
     pub general: General,
     pub layout: Layout,
+    pub theme: Theme,
 }
 
 /// `[general]`
@@ -111,6 +112,26 @@ impl Default for Margin {
             right: 16,
             bottom: 16,
             left: 16,
+        }
+    }
+}
+
+/// `[theme]`: the visual settings applied to Popups.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Theme {
+    /// The longest side of a Popup's icon or image, in pixels.
+    pub icon_size: u32,
+    /// The freedesktop icon theme app icons are looked up in; empty means
+    /// the GTK icon theme, falling back to `hicolor`.
+    pub icon_theme: String,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            icon_size: 48,
+            icon_theme: String::new(),
         }
     }
 }

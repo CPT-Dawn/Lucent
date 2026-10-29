@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use lucent::config::{Anchor, Config, General, Layout, Margin, Problem};
+use lucent::config::{Anchor, Config, General, Layout, Margin, Problem, Theme};
 
 fn defaults() -> Config {
     Config {
@@ -22,6 +22,10 @@ fn defaults() -> Config {
             width: 360,
             gap: 8,
             monitor: None,
+        },
+        theme: Theme {
+            icon_size: 48,
+            icon_theme: String::new(),
         },
     }
 }
@@ -70,6 +74,10 @@ fn a_full_config_sets_every_field() {
         right = 2
         bottom = 3
         left = 4
+
+        [theme]
+        icon_size = 64
+        icon_theme = "Papirus-Dark"
         "#,
     );
 
@@ -91,6 +99,10 @@ fn a_full_config_sets_every_field() {
                 width: 420,
                 gap: 12,
                 monitor: Some("HDMI-A-1".into()),
+            },
+            theme: Theme {
+                icon_size: 64,
+                icon_theme: "Papirus-Dark".into(),
             },
         }
     );
