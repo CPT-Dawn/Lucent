@@ -85,6 +85,13 @@ impl DbusAdapter {
         Some(format!("{} (pid {pid})", comm.trim()))
     }
 
+    /// Gives up the well-known name, so the bus activates a fresh Lucent for
+    /// the next call. Calls the bus routed here before the release may still
+    /// be queued: [`Self::process`] them before exiting.
+    pub fn release_name(&self) -> Result<(), dbus::Error> {
+        self.conn.release_name(NAME).map(drop)
+    }
+
     /// The connection's fd, to be polled for readability. libdbus owns it.
     pub fn fd(&self) -> RawFd {
         self.conn.channel().watch().fd

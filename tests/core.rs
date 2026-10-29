@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use lucent::config::Config;
-use lucent::core::{CloseReason, Core, Effect, Event, Notification, Popup};
+use lucent::core::{Button, CloseReason, Core, Effect, Event, Notification, Popup};
 use lucent::theme::Theme;
 
 fn hello() -> Notification {
@@ -51,6 +51,9 @@ fn notify_shows_a_popup_that_expires_after_the_default_timeout() {
             Effect::Closed {
                 id,
                 reason: CloseReason::Expired,
+            },
+            Effect::StartIdleTimer {
+                after: Duration::from_secs(5),
             },
         ]
     );
@@ -268,4 +271,111 @@ fn the_configured_max_visible_caps_the_stack() {
     let effects = core.handle(Event::Notify(titled("b")));
 
     assert_eq!(last_stack(&effects), stack(&[("a", 1)]));
+}
+
+fn idle_core(text: &str) -> Core {
+    let (config, problems) = Config::parse(text);
+    assert_eq!(problems, []);
+    Core::with_config(config)
+}
+
+#[test]
+fn once_the_last_popup_closes_the_grace_period_starts_and_then_lucent_exits() {
+    let mut core = idle_core("general.idle_grace = 1200");
+    let id = notify(&mut core, hello());
+
+    let effects = core.handle(Event::TimerFired(id));
+    assert_eq!(
+        effects.last(),
+        Some(&Effect::StartIdleTimer {
+            after: Duration::from_millis(1200)
+        }),
+        "{effects:?}"
+    );
+
+    assert_eq!(core.handle(Event::IdleTimerFired), [Effect::Exit]);
+}
+
+#[test]
+fn a_notification_during_the_grace_period_cancels_the_exit() {
+    let mut core = idle_core("");
+    let id = notify(&mut core, hello());
+    core.handle(Event::TimerFired(id));
+
+    let effects = core.handle(Event::Notify(titled("again")));
+    assert!(effects.contains(&Effect::CancelIdleTimer), "{effects:?}");
+
+    // Even a timer that fires late must not take the new Popup down.
+    assert_eq!(core.handle(Event::IdleTimerFired), []);
+}
+
+#[test]
+fn ids_carry_on_from_the_last_id_an_earlier_run_handed_out() {
+    let mut core = Core::new().resuming_after(41);
+
+    assert_eq!(notify(&mut core, hello()), 42);
+    assert_eq!(core.last_id(), 42);
+}
+
+fn starts_idle(effects: &[Effect]) -> bool {
+    effects
+        .iter()
+        .any(|e| matches!(e, Effect::StartIdleTimer { .. }))
+}
+
+#[test]
+fn dismissing_everything_at_once_starts_the_grace_period() {
+    let mut core = idle_core("general.max_visible = 1\ngeneral.right_click = \"dismiss-all\"");
+    let a = notify(&mut core, titled("a"));
+    notify(&mut core, titled("b"));
+
+    let effects = core.handle(Event::Click {
+        id: a,
+        button: Button::Right,
+    });
+
+    assert!(starts_idle(&effects), "{effects:?}");
+}
+
+#[test]
+fn no_grace_period_while_the_queue_still_holds_notifications() {
+    let mut core = idle_core("general.max_visible = 1");
+    let a = notify(&mut core, titled("a"));
+    let b = notify(&mut core, titled("b"));
+
+    assert!(!starts_idle(&core.handle(Event::TimerFired(a))));
+    assert!(starts_idle(&core.handle(Event::Close(b))));
+}
+
+#[test]
+fn a_fresh_start_with_nothing_to_show_runs_the_grace_period() {
+    let mut core = idle_core("general.idle_grace = 300");
+
+    assert_eq!(
+        core.handle(Event::Started),
+        [Effect::StartIdleTimer {
+            after: Duration::from_millis(300)
+        }]
+    );
+    assert_eq!(core.handle(Event::IdleTimerFired), [Effect::Exit]);
+}
+
+#[test]
+fn with_idle_exit_off_no_exit_is_ever_decided() {
+    let mut core = idle_core("general.idle_exit = false");
+
+    let mut effects = core.handle(Event::Started);
+    let id = notify(&mut core, hello());
+    effects.extend(core.handle(Event::TimerFired(id)));
+    let id = notify(&mut core, hello());
+    effects.extend(core.handle(Event::Close(id)));
+    effects.extend(core.handle(Event::IdleTimerFired));
+
+    assert!(
+        !effects.iter().any(|e| matches!(
+            e,
+            Effect::StartIdleTimer { .. } | Effect::CancelIdleTimer | Effect::Exit
+        )),
+        "{effects:?}"
+    );
 }

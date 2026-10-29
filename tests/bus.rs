@@ -19,6 +19,8 @@ struct Bus {
     daemon: Child,
     addr: String,
     config_home: tempfile::TempDir,
+    /// `$XDG_RUNTIME_DIR` for Lucent, where it persists the last id.
+    runtime_dir: tempfile::TempDir,
 }
 
 impl Bus {
@@ -36,6 +38,73 @@ impl Bus {
             daemon,
             addr: addr.trim().to_owned(),
             config_home: tempfile::tempdir().unwrap(),
+            runtime_dir: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    /// A private session bus that starts Lucent by D-Bus activation, the way
+    /// a desktop session does, with drawing off and `config` as its config.
+    fn activating(config: &str) -> Bus {
+        let config_home = tempfile::tempdir().unwrap();
+        let runtime_dir = tempfile::tempdir().unwrap();
+        let lucent_config = config_home.path().join("lucent");
+        std::fs::create_dir_all(&lucent_config).unwrap();
+        std::fs::write(lucent_config.join("config.toml"), config).unwrap();
+
+        let services = runtime_dir.path().join("services");
+        std::fs::create_dir_all(&services).unwrap();
+        std::fs::write(
+            services.join(format!("{NAME}.service")),
+            format!(
+                "[D-BUS Service]\nName={NAME}\nExec={}\n",
+                env!("CARGO_BIN_EXE_lucent")
+            ),
+        )
+        .unwrap();
+        let bus_config = runtime_dir.path().join("bus.conf");
+        std::fs::write(
+            &bus_config,
+            format!(
+                r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:dir={dir}</listen>
+  <servicedir>{services}</servicedir>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"#,
+                dir = runtime_dir.path().display(),
+                services = services.display(),
+            ),
+        )
+        .unwrap();
+
+        // Activated services inherit the daemon's environment.
+        let mut daemon = Command::new("dbus-daemon")
+            .arg(format!("--config-file={}", bus_config.display()))
+            .args(["--nofork", "--nopidfile", "--print-address=1"])
+            .env("LUCENT_NO_DRAW", "1")
+            .env("XDG_CONFIG_HOME", config_home.path())
+            .env("XDG_RUNTIME_DIR", runtime_dir.path())
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("LUCENT_LOG")
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("dbus-daemon must be in PATH");
+        let mut addr = String::new();
+        BufReader::new(daemon.stdout.take().unwrap())
+            .read_line(&mut addr)
+            .unwrap();
+        Bus {
+            daemon,
+            addr: addr.trim().to_owned(),
+            config_home,
+            runtime_dir,
         }
     }
 
@@ -57,6 +126,7 @@ impl Bus {
         cmd.env("DBUS_SESSION_BUS_ADDRESS", &self.addr)
             .env("LUCENT_NO_DRAW", "1")
             .env("XDG_CONFIG_HOME", self.config_home.path())
+            .env("XDG_RUNTIME_DIR", self.runtime_dir.path())
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("LUCENT_LOG");
         cmd
@@ -368,6 +438,105 @@ fn a_replacement_keeps_the_id_and_an_unknown_replaces_id_gets_a_fresh_one() {
 
     let fresh = notify_replacing(&client, 4242, "stranger", "hi");
     assert!(fresh != id && fresh != 4242, "got {fresh}");
+}
+
+/// Waits for Lucent to end on its own and returns how long that took.
+fn wait_for_exit(lucent: &mut Lucent, within: Duration) -> Duration {
+    let start = Instant::now();
+    loop {
+        if let Some(status) = lucent.0.try_wait().unwrap() {
+            assert!(status.success(), "exit status {status:?}");
+            return start.elapsed();
+        }
+        assert!(start.elapsed() < within, "Lucent is still running");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn lucent_exits_once_its_last_popup_closes_and_the_grace_period_passes() {
+    let bus = Bus::new();
+    bus.write_config("[general]\ntimeout = 100\nidle_grace = 400\n");
+    let mut lucent = bus.spawn_lucent();
+    let client = bus.client();
+
+    notify(&client, "Hello", "World");
+    let took = wait_for_exit(&mut lucent, Duration::from_secs(3));
+
+    assert!(took >= Duration::from_millis(450), "exited after {took:?}");
+    assert!(!name_has_owner(&client, NAME), "the bus name was released");
+}
+
+#[test]
+fn with_idle_exit_off_lucent_stays_resident() {
+    let bus = Bus::new();
+    bus.write_config("[general]\ntimeout = 100\nidle_exit = false\nidle_grace = 100\n");
+    let mut lucent = bus.spawn_lucent();
+    let client = bus.client();
+
+    notify(&client, "Hello", "World");
+    std::thread::sleep(Duration::from_millis(800));
+
+    assert!(lucent.0.try_wait().unwrap().is_none(), "Lucent exited");
+}
+
+#[test]
+fn ids_keep_increasing_across_restarts() {
+    let bus = Bus::new();
+    bus.write_config("[general]\ntimeout = 50\nidle_grace = 50\n");
+    let client = bus.client();
+
+    let mut lucent = bus.spawn_lucent();
+    let first = notify(&client, "Hello", "World");
+    let second = notify(&client, "Hello", "again");
+    wait_for_exit(&mut lucent, Duration::from_secs(3));
+
+    let _lucent = bus.spawn_lucent();
+    let after_restart = notify(&client, "Hello", "from the other side");
+
+    assert!(
+        first < second && second < after_restart,
+        "ids {first}, {second}, then {after_restart} after the restart"
+    );
+}
+
+#[test]
+fn notifications_sent_while_lucent_shuts_down_are_answered_or_reactivate_it() {
+    // Popups vanish at once and Lucent exits right after, so a stream of
+    // Notifications, sent at a sweep of delays, keeps landing on a Lucent
+    // that is in the middle of shutting down.
+    let bus = Bus::activating("[general]\ntimeout = 0\nidle_grace = 0\n");
+    let client = bus.client();
+    let rule = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged")
+        .with_sender("org.freedesktop.DBus");
+    client.add_match_no_cb(&rule.match_str()).unwrap();
+
+    let mut ids = Vec::new();
+    // The window is narrow, so this catches a regression often, not always.
+    for i in 0..400u64 {
+        // A Notify left unanswered by an exiting Lucent makes `notify` panic.
+        ids.push(notify(&client, "tick", &i.to_string()));
+        std::thread::sleep(Duration::from_micros(i * 37 % 1500));
+    }
+
+    let mut activations = 0;
+    while let Some(msg) = client.channel().pop_message() {
+        if msg.member().as_deref() == Some("NameOwnerChanged")
+            && let Ok((name, _, new)) = msg.read3::<String, String, String>()
+            && name == NAME
+            && !new.is_empty()
+        {
+            activations += 1;
+        }
+    }
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "ids must keep increasing: {ids:?}"
+    );
+    assert!(
+        activations > 1,
+        "Lucent should have exited and been reactivated along the way"
+    );
 }
 
 #[test]
