@@ -62,7 +62,7 @@ fn a_replacement_updates_the_progress_in_place() {
 fn midnight_bloom_fills_progress_in_mint_over_a_faint_track() {
     let theme = Theme::midnight_bloom();
     assert_eq!(theme.progress_fill, Rgba::new(0x8D, 0xE3, 0xDC, 255));
-    assert_eq!(theme.progress_track, Rgba::new(252, 253, 253, 31));
+    assert_eq!(theme.progress_track, Rgba::new(255, 255, 255, 31));
 }
 
 #[test]

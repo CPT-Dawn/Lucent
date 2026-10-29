@@ -45,6 +45,18 @@ impl Rgba {
         Self { a: a as u8, ..self }
     }
 
+    /// This colour with `percent` of `tint` mixed in, keeping its alpha.
+    pub fn tinted(self, tint: Self, percent: u8) -> Self {
+        let p = u16::from(percent.min(100));
+        let mix = |a: u8, b: u8| ((u16::from(a) * (100 - p) + u16::from(b) * p + 50) / 100) as u8;
+        Self {
+            r: mix(self.r, tint.r),
+            g: mix(self.g, tint.g),
+            b: mix(self.b, tint.b),
+            a: self.a,
+        }
+    }
+
     /// Channels as Cairo wants them, 0.0–1.0.
     pub fn to_f64(self) -> (f64, f64, f64, f64) {
         let f = |c: u8| f64::from(c) / 255.0;
@@ -195,29 +207,31 @@ theme_fields! {
 
 impl Theme {
     /// The default Preset: dark smoked glass with mint accents, made to sit
-    /// under compositor blur yet stay readable without it.
+    /// under compositor blur yet stay readable without it. Text is one
+    /// neutral hue at three strengths, so weight and opacity carry the
+    /// hierarchy, and mint is kept for the app name and highlights.
     pub fn midnight_bloom() -> Self {
         Self {
             font: "Inter Variable, Inter, sans-serif".into(),
             app_name_size: 9,
-            summary_size: 11,
+            summary_size: 10,
             body_size: 10,
-            background: Rgba::hex(0x141B1F, 0.82),
-            border: Rgba::new(252, 253, 253, alpha_byte(0.13)),
-            border_top: Rgba::new(252, 253, 253, alpha_byte(0.28)),
+            background: Rgba::hex(0x151C20, 0.80),
+            border: Rgba::new(255, 255, 255, alpha_byte(0.08)),
+            border_top: Rgba::new(255, 255, 255, alpha_byte(0.20)),
             border_width: 1,
-            radius: 20,
-            padding: 16,
-            app_name: Rgba::hex(0x92A8A9, 1.0),
-            summary: Rgba::hex(0xC0CAF5, 1.0),
-            body: Rgba::hex(0xA9B1D6, 1.0),
+            radius: 18,
+            padding: 14,
+            app_name: Rgba::new(141, 227, 220, alpha_byte(0.78)),
+            summary: Rgba::hex(0xEEF4F3, 1.0),
+            body: Rgba::new(226, 240, 238, alpha_byte(0.74)),
             accent: Rgba::hex(0x8DE3DC, 1.0),
-            accent_width: 3,
-            progress_track: Rgba::new(252, 253, 253, alpha_byte(0.12)),
+            accent_width: 0,
+            progress_track: Rgba::new(255, 255, 255, alpha_byte(0.12)),
             progress_fill: Rgba::hex(0x8DE3DC, 1.0),
             critical: Rgba::hex(0xF7768E, 1.0),
-            low_opacity: 60,
-            icon_size: 48,
+            low_opacity: 70,
+            icon_size: 40,
             icon_theme: String::new(),
         }
     }
@@ -225,14 +239,14 @@ impl Theme {
     /// Paper-white glass with ink text and a teal accent, for light desktops.
     pub fn light() -> Self {
         Self {
-            background: Rgba::hex(0xF4F5F9, 0.90),
-            border: Rgba::new(15, 20, 40, alpha_byte(0.12)),
-            border_top: Rgba::new(255, 255, 255, alpha_byte(0.95)),
-            app_name: Rgba::hex(0x6172B0, 1.0),
-            summary: Rgba::hex(0x343B58, 1.0),
-            body: Rgba::hex(0x565A6E, 1.0),
+            background: Rgba::hex(0xF6F7F8, 0.86),
+            border: Rgba::new(10, 20, 25, alpha_byte(0.10)),
+            border_top: Rgba::new(255, 255, 255, alpha_byte(0.90)),
+            app_name: Rgba::hex(0x118C74, 0.85),
+            summary: Rgba::hex(0x14191C, 1.0),
+            body: Rgba::new(16, 24, 28, alpha_byte(0.72)),
             accent: Rgba::hex(0x118C74, 1.0),
-            progress_track: Rgba::new(15, 20, 40, alpha_byte(0.10)),
+            progress_track: Rgba::new(10, 20, 25, alpha_byte(0.10)),
             progress_fill: Rgba::hex(0x118C74, 1.0),
             critical: Rgba::hex(0xF52A65, 1.0),
             ..Self::midnight_bloom()
@@ -265,8 +279,9 @@ impl Theme {
     }
 
     /// This Theme as worn by a Notification of `urgency`.
-    /// Critical takes the `critical` colour for its border, accent and
-    /// progress fill; low fades its text, accent and progress fill to
+    /// Critical takes a wash of the `critical` colour in its background, a
+    /// softened `critical` border, and `critical` accent and progress fill;
+    /// low fades its text, accent and progress fill to
     /// `low_opacity`.
     pub fn for_urgency(mut self, urgency: Urgency) -> Self {
         match urgency {
@@ -284,8 +299,9 @@ impl Theme {
             }
             Urgency::Normal => {}
             Urgency::Critical => {
-                self.border = self.critical;
-                self.border_top = self.critical;
+                self.background = self.background.tinted(self.critical, 7);
+                self.border = self.critical.faded(55);
+                self.border_top = self.critical.faded(85);
                 self.accent = self.critical;
                 self.progress_fill = self.critical;
             }

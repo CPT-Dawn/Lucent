@@ -36,15 +36,17 @@ fn hex(rgb: u32, alpha: u8) -> Rgba {
 fn with_no_config_popups_wear_midnight_bloom() {
     let theme = theme_for("", Urgency::Normal);
 
-    // The values from the spec (#18); 82% alpha is 209 of 255.
-    assert_eq!(theme.background, hex(0x141B1F, 209));
-    assert_eq!(theme.border, Rgba::new(252, 253, 253, 33));
+    // 80% alpha is 204 of 255.
+    assert_eq!(theme.background, hex(0x151C20, 204));
+    assert_eq!(theme.border, Rgba::new(255, 255, 255, 20));
     assert_eq!(theme.border_width, 1);
-    assert_eq!(theme.radius, 20);
-    assert_eq!(theme.summary, hex(0xC0CAF5, 255));
-    assert_eq!(theme.body, hex(0xA9B1D6, 255));
-    assert_eq!(theme.app_name, hex(0x92A8A9, 255));
+    assert_eq!(theme.radius, 18);
+    // One neutral hue at full and 74% strength, mint for the app name.
+    assert_eq!(theme.summary, hex(0xEEF4F3, 255));
+    assert_eq!(theme.body, Rgba::new(226, 240, 238, 189));
+    assert_eq!(theme.app_name, hex(0x8DE3DC, 199));
     assert_eq!(theme.accent, hex(0x8DE3DC, 255));
+    assert_eq!(theme.accent_width, 0, "no accent line by default");
     // Inter, preferring the 0.9 MB variable font over the 13 MB static
     // collection: Pango maps the font file once per face per library, and a
     // collection is mostly resident however little of it is used.
@@ -129,8 +131,10 @@ fn critical_popups_wear_rose_and_low_ones_are_dimmed() {
 
     assert_eq!(normal, Theme::preset("midnight-bloom").unwrap());
     let rose = hex(0xF7768E, 255);
-    assert_eq!((critical.border, critical.accent), (rose, rose));
-    assert_eq!(critical.background, normal.background);
+    assert_eq!(critical.accent, rose);
+    assert_eq!(critical.border, rose.faded(55), "a soft rose hairline");
+    assert_ne!(critical.background, normal.background, "a rose wash");
+    assert_eq!(critical.background.a, normal.background.a);
     for (dim, full) in [
         (low.summary, normal.summary),
         (low.body, normal.body),
@@ -147,7 +151,7 @@ fn the_urgency_styles_follow_the_theme_overrides() {
 
     let critical = theme_for(text, Urgency::Critical);
     assert_eq!(critical.accent, hex(0xFF0000, 255));
-    assert_eq!(theme_for(text, Urgency::Low).summary, hex(0xC0CAF5, 128));
+    assert_eq!(theme_for(text, Urgency::Low).summary, hex(0xEEF4F3, 128));
 }
 
 /// Every Theme field is listed, commented out so a copied `[theme]` still
@@ -193,9 +197,9 @@ fn the_documented_theme_values_are_midnight_bloom() {
 }
 
 #[test]
-fn icons_are_48_px_from_the_system_icon_theme_unless_overridden() {
+fn icons_are_40_px_from_the_system_icon_theme_unless_overridden() {
     let default = theme_for("", Urgency::Normal);
-    assert_eq!((default.icon_size, default.icon_theme.as_str()), (48, ""));
+    assert_eq!((default.icon_size, default.icon_theme.as_str()), (40, ""));
 
     let set = theme_for(
         "[theme]\nicon_size = 64\nicon_theme = \"Papirus-Dark\"",

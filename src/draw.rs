@@ -9,11 +9,17 @@ use pango::{EllipsizeMode, FontDescription, Layout, WrapMode};
 
 use crate::core::Popup;
 use crate::icon;
+use crate::image::Image;
 use crate::theme::Rgba;
 
-const LINE_GAP: f64 = 4.0;
+/// Space between the app name, summary and body, which read as one unit.
+const LINE_GAP: f64 = 2.0;
+/// Extra space between the lines of a body that wraps.
+const BODY_LEADING: i32 = 2;
 /// Thickness of the progress bar, in pixels.
-const BAR_HEIGHT: f64 = 6.0;
+const BAR_HEIGHT: f64 = 4.0;
+/// Space above the progress bar.
+const BAR_GAP: f64 = 8.0;
 /// Space between the icon and the text beside it.
 const ICON_GAP: f64 = 12.0;
 
@@ -36,12 +42,16 @@ fn text_context(cr: &Context) -> pango::Context {
 }
 /// Actions: at most this many share a row; more wrap below.
 const ACTIONS_PER_ROW: usize = 3;
+/// Actions are pills this tall.
 const ACTION_HEIGHT: f64 = 28.0;
 const ACTION_GAP: f64 = 8.0;
-const ACTION_RADIUS: f64 = 10.0;
+/// Space between the body and the first row of Actions.
+const ACTIONS_TOP: f64 = 12.0;
 const ACTION_PADDING: f64 = 8.0;
 /// How strongly a resting Action is filled, in percent of the summary colour.
-const ACTION_WASH: u8 = 10;
+const ACTION_WASH: u8 = 12;
+/// Corner radius of a photo or avatar, as a share of its shorter side.
+const PHOTO_ROUNDING: f64 = 0.225;
 
 /// The text blocks of a Popup, top to bottom, with their colours.
 fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, Rgba)> {
@@ -64,7 +74,7 @@ fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, R
 
     let mut blocks = Vec::with_capacity(4);
     if !popup.app_name.is_empty() {
-        let layout = block("", theme.app_name_size, 1);
+        let layout = block("Medium", theme.app_name_size, 1);
         layout.set_text(&popup.app_name);
         blocks.push((layout, theme.app_name));
     }
@@ -74,6 +84,7 @@ fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, R
     if !popup.body.is_empty() {
         let lines = i32::try_from(popup.body_lines.max(1)).unwrap_or(i32::MAX);
         let layout = block("", theme.body_size, lines);
+        layout.set_spacing(BODY_LEADING * pango::SCALE);
         set_body(&layout, &popup.body, theme.accent);
         blocks.push((layout, theme.body));
     }
@@ -119,7 +130,7 @@ fn content_height(blocks: &[(Layout, Rgba)]) -> f64 {
 /// The room a Popup's progress bar takes, gap included; none without one.
 fn bar_room(popup: &Popup) -> f64 {
     if popup.progress.is_some() {
-        BAR_HEIGHT + LINE_GAP
+        BAR_GAP + BAR_HEIGHT
     } else {
         0.0
     }
@@ -164,7 +175,7 @@ fn measure_body(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> f64 {
 /// the full inner width equally, under the icon as well as the text.
 fn layout_actions(count: usize, body_height: f64, width: u32, padding: f64) -> Vec<Rect> {
     let inner = (width as f64 - 2.0 * padding).max(0.0);
-    let top = padding + body_height + ACTION_GAP;
+    let top = padding + body_height + ACTIONS_TOP;
     (0..count)
         .map(|i| {
             let row = i / ACTIONS_PER_ROW;
@@ -256,19 +267,30 @@ pub fn paint(
         cr.fill()?;
     }
 
-    if let Some(icon) = icon {
-        cr.set_source_surface(icon, padding, padding)?;
-        cr.paint()?;
-    }
-
     let left = text_left(popup, icon);
     let blocks = layouts(cr, popup, left, width);
+    if let Some(icon) = icon {
+        // Centred on the text beside it, or at the top when taller.
+        let (iw, ih) = icon::extent(icon);
+        let text = content_height(&blocks) + bar_room(popup);
+        let y = padding + ((text - ih) / 2.0).max(0.0);
+        cr.save()?;
+        // Photos and avatars get rounded corners; themed icons have their
+        // own shapes.
+        if !matches!(popup.image, Some(Image::Icon(_))) {
+            rounded_rect(cr, padding, y, iw, ih, iw.min(ih) * PHOTO_ROUNDING);
+            cr.clip();
+        }
+        cr.set_source_surface(icon, padding, y)?;
+        cr.paint()?;
+        cr.restore()?;
+    }
     // The bar sits under the text, above any "+N more" hint.
     let bar_at = blocks.len() - usize::from(popup.more > 0);
     let mut y = padding;
     for (i, (layout, colour)) in blocks.iter().enumerate() {
         if i == bar_at {
-            y += progress_bar(cr, popup, left, y, w)?;
+            y += progress_bar(cr, popup, left, y - LINE_GAP + BAR_GAP, w)?;
         }
         cr.move_to(left, y);
         set_source(cr, *colour);
@@ -276,12 +298,12 @@ pub fn paint(
         y += layout.pixel_extents().1.height() as f64 + LINE_GAP;
     }
     if bar_at == blocks.len() {
-        progress_bar(cr, popup, left, y, w)?;
+        progress_bar(cr, popup, left, y - LINE_GAP + BAR_GAP, w)?;
     }
 
     let body = body_height(&blocks, popup, icon);
     let rects = layout_actions(popup.actions.len(), body, width, padding);
-    let action_radius = ACTION_RADIUS.min(f64::from(theme.radius));
+    let action_radius = ACTION_HEIGHT / 2.0;
     let labels = text_context(cr);
     for (index, (action, rect)) in popup.actions.iter().zip(&rects).enumerate() {
         // Resting Actions are a faint wash of the summary colour, so they

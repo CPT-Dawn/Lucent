@@ -97,53 +97,53 @@ left = 16
 # Font family list for all text, as Pango understands it.
 # font = "Inter Variable, Inter, sans-serif"
 
-# Text sizes, in points. The summary is semibold.
+# Text sizes, in points. The summary is semibold and the app name medium.
 # app_name_size = 9
-# summary_size = 11
+# summary_size = 10
 # body_size = 10
 
 # Fill behind the text. Below full alpha it lets compositor blur show.
-# background = "rgba(20, 27, 31, 0.82)"
+# background = "rgba(21, 28, 32, 0.80)"
 
 # The 1 px outline, and its brighter top edge that catches the light.
-# border = "rgba(252, 253, 253, 0.13)"
-# border_top = "rgba(252, 253, 253, 0.28)"
+# border = "rgba(255, 255, 255, 0.08)"
+# border_top = "rgba(255, 255, 255, 0.20)"
 
 # Outline thickness, in pixels; 0 draws none.
 # border_width = 1
 
 # Corner radius, in pixels.
-# radius = 20
+# radius = 18
 
 # Space between the Popup's edge and its text, in pixels.
-# padding = 16
+# padding = 14
 
 # Text colours.
-# app_name = "#92A8A9"
-# summary = "#C0CAF5"
-# body = "#A9B1D6"
+# app_name = "rgba(141, 227, 220, 0.78)"
+# summary = "#EEF4F3"
+# body = "rgba(226, 240, 238, 0.74)"
 
-# The accent line beside the text.
+# Links, the hovered Action, and the accent line if it is drawn.
 # accent = "#8DE3DC"
 
-# Width of the accent line, in pixels; 0 draws none.
-# accent_width = 3
+# Width of an accent line beside the text, in pixels; 0 draws none.
+# accent_width = 0
 
 # The progress bar a Notification with a "value" hint shows: its empty
 # track, and the part filled in.
-# progress_track = "rgba(252, 253, 253, 0.12)"
+# progress_track = "rgba(255, 255, 255, 0.12)"
 # progress_fill = "#8DE3DC"
 
-# Critical Notifications take this colour for their border, accent and
-# progress fill.
+# Critical Notifications take a faint wash of this colour behind their text,
+# a softened border in it, and it as their accent and progress fill.
 # critical = "#F7768E"
 
 # Low-urgency Notifications fade their text, accent and progress fill to
 # this opacity, in percent, so they don't compete for attention.
-# low_opacity = 60
+# low_opacity = 70
 
 # The longest side of a Popup's icon or image, in pixels.
-# icon_size = 48
+# icon_size = 40
 
 # The icon theme app icons are looked up in, by its directory name under
 # /usr/share/icons or ~/.local/share/icons. Empty uses your GTK icon theme

@@ -67,10 +67,10 @@ fn a_rule_matches_by_urgency() {
     "##;
 
     assert_eq!(shown(text, sent("a", Urgency::Low)).0.theme.padding, 8);
-    assert_eq!(shown(text, sent("a", Urgency::Normal)).0.theme.padding, 16);
+    assert_eq!(shown(text, sent("a", Urgency::Normal)).0.theme.padding, 14);
     assert_eq!(
         shown(text, sent("a", Urgency::Critical)).0.theme.padding,
-        16
+        14
     );
 }
 
@@ -92,14 +92,14 @@ fn a_rule_with_both_matchers_needs_both_to_match() {
     );
     assert_eq!(
         shown(text, sent("Spotify", Urgency::Normal)).0.theme.radius,
-        20
+        18
     );
     assert_eq!(
         shown(text, sent("Firefox", Urgency::Critical))
             .0
             .theme
             .radius,
-        20
+        18
     );
 }
 
@@ -138,7 +138,7 @@ fn a_rule_can_restyle_critical_notifications() {
 
     let theme = shown(text, sent("a", Urgency::Critical)).0.theme;
     assert_eq!(theme.accent, BLUE);
-    assert_eq!(theme.border, BLUE);
+    assert_eq!(theme.border, BLUE.faded(55));
 }
 
 #[test]

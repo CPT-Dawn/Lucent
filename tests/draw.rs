@@ -48,7 +48,7 @@ fn a_popup_grows_to_fit_an_icon_taller_than_its_text() {
     let with_icon = draw::measure(&popup(&[]), Some(&icon), 360);
 
     assert!(plain < 96, "one short line should be shorter than the icon");
-    assert!(with_icon >= 96 + 2 * 16, "{with_icon} leaves no room");
+    assert!(with_icon >= 96 + 2 * 14, "{with_icon} leaves no room");
 }
 
 #[test]
@@ -66,9 +66,9 @@ fn the_icon_is_painted_at_the_top_left_inside_the_padding() {
     let pixel = |x: usize, y: usize| {
         u32::from_ne_bytes(data[y * stride + x * 4..][..4].try_into().unwrap())
     };
-    assert_eq!(pixel(16 + 24, 16 + 24), 0xFFFF_0000, "icon centre");
+    assert_eq!(pixel(14 + 24, 14 + 24), 0xFFFF_0000, "icon centre");
     assert_ne!(
-        pixel(16 + 48 + 2, 16 + 24),
+        pixel(14 + 48 + 2, 14 + 24),
         0xFFFF_0000,
         "right of the icon"
     );
