@@ -8,10 +8,12 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::config::{ClickAction, Config};
+use crate::markup;
+use crate::theme::Theme;
 
 /// A Notification as an application asked for it, already stripped of any
 /// transport types.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Notification {
     pub app_name: String,
     pub summary: String,
@@ -20,6 +22,10 @@ pub struct Notification {
     /// any id that matches nothing) asks for a fresh one.
     pub replaces_id: u32,
     pub actions: Vec<Action>,
+    /// Decides the Urgency style of the Popup's Theme, and whether it expires.
+    pub urgency: Urgency,
+    /// How long the sender asked for the Popup to stay up.
+    pub timeout: Timeout,
 }
 
 /// A labelled choice the sender offers; the key is reported back when it is
@@ -41,6 +47,49 @@ pub enum Button {
     Right,
 }
 
+/// The sender-declared importance of a Notification.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Urgency {
+    Low,
+    #[default]
+    Normal,
+    /// Never expires, whatever the sender requests.
+    Critical,
+}
+
+impl Urgency {
+    /// From the spec's `urgency` hint byte; unknown values count as normal.
+    pub fn from_byte(byte: u8) -> Self {
+        match byte {
+            0 => Self::Low,
+            2 => Self::Critical,
+            _ => Self::Normal,
+        }
+    }
+}
+
+/// A sender's requested expiry, as the spec's `expire_timeout`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Timeout {
+    /// Lucent's configured timeout (`-1`, or any negative value).
+    #[default]
+    Default,
+    /// Stay until closed (`0`).
+    Never,
+    After(Duration),
+}
+
+impl Timeout {
+    /// From `expire_timeout` in milliseconds.
+    pub fn from_millis(millis: i32) -> Self {
+        match u64::try_from(millis) {
+            Ok(0) => Self::Never,
+            Ok(ms) => Self::After(Duration::from_millis(ms)),
+            Err(_) => Self::Default,
+        }
+    }
+}
+
 /// What the renderer should show for one Notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Popup {
@@ -54,6 +103,12 @@ pub struct Popup {
     /// Notifications waiting in the Queue, shown as a "+N more" hint. Only the
     /// last Popup of the Stack carries a non-zero count.
     pub more: usize,
+    /// The most lines of body to show before cutting it with an ellipsis.
+    pub body_lines: u32,
+    /// How long the Popup stays up once shown; `None` until closed.
+    pub expire: Option<Duration>,
+    /// The Theme to draw this Popup with, resolved for its Urgency.
+    pub theme: Theme,
 }
 
 /// Why a Notification closed, as numbered by the freedesktop spec.
@@ -75,6 +130,10 @@ pub enum Event {
     TimerFired(u32),
     /// An application asked for this Notification to close.
     Close(u32),
+    /// Lucent has just started serving, with nothing to show yet.
+    Started,
+    /// The timer started by [`Effect::StartIdleTimer`] has elapsed.
+    IdleTimerFired,
     /// The user pressed `button` on this Notification's Popup.
     Click {
         id: u32,
@@ -104,6 +163,13 @@ pub enum Effect {
     CancelTimer(u32),
     /// Emit `NotificationClosed` for `id`.
     Closed { id: u32, reason: CloseReason },
+    /// The Stack and Queue are empty: fire [`Event::IdleTimerFired`] once
+    /// `after` has elapsed (Idle exit, ADR-0002).
+    StartIdleTimer { after: Duration },
+    /// Drop the idle timer: there is something to show again.
+    CancelIdleTimer,
+    /// Release the bus name and end the process.
+    Exit,
     /// Emit `ActionInvoked` for `id` with the Action's `key`.
     ActionInvoked { id: u32, key: String },
 }
@@ -119,7 +185,7 @@ fn buttons(actions: &[Action]) -> Vec<Action> {
 
 /// Where a visible Popup's timeout stands.
 #[derive(Debug, Clone, Copy)]
-enum Timeout {
+enum Countdown {
     /// A timer started at `started` fires after `after`.
     Running { started: Instant, after: Duration },
     /// Hovered: no timer runs, and `remaining` is left once the pointer goes.
@@ -147,10 +213,12 @@ pub struct Core {
     stack: Vec<Popup>,
     /// Notifications waiting for room, oldest first.
     queue: VecDeque<Popup>,
+    /// Whether the idle grace period is running.
+    idle_armed: bool,
     /// The Actions of every live Notification that offers any.
     actions: HashMap<u32, Vec<Action>>,
     /// The timeout of every Popup in the Stack.
-    timeouts: HashMap<u32, Timeout>,
+    timeouts: HashMap<u32, Countdown>,
     clock: Clock,
 }
 
@@ -174,6 +242,7 @@ impl Core {
             last_id: 0,
             stack: Vec::new(),
             queue: VecDeque::new(),
+            idle_armed: false,
             actions: HashMap::new(),
             timeouts: HashMap::new(),
             clock: Clock(Box::new(Instant::now)),
@@ -193,15 +262,63 @@ impl Core {
         Self::with_config(config)
     }
 
+    /// Continues numbering after `last_id`, the last id an earlier run handed
+    /// out, so ids keep increasing across Idle exits.
+    pub fn resuming_after(mut self, last_id: u32) -> Self {
+        self.last_id = last_id;
+        self
+    }
+
+    /// Whether the Stack and Queue are both empty. After [`Effect::Exit`] the
+    /// adapters drain calls already on their way and exit only if this still
+    /// holds.
+    pub fn is_idle(&self) -> bool {
+        self.stack.is_empty() && self.queue.is_empty()
+    }
+
+    /// The most recent id handed out, for the adapters to persist.
+    pub fn last_id(&self) -> u32 {
+        self.last_id
+    }
+
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         match event {
-            Event::Notify(n) => self.notify(n),
+            Event::Notify(n) => {
+                let mut effects = self.notify(n);
+                if std::mem::take(&mut self.idle_armed) {
+                    effects.push(Effect::CancelIdleTimer);
+                }
+                effects
+            }
             Event::TimerFired(id) => self.expire(id),
             Event::Close(id) => self.close(id),
+            Event::Started => self.arm_idle().into_iter().collect(),
+            Event::IdleTimerFired => self.idle_elapsed(),
             Event::Click { id, button } => self.click(id, button),
             Event::InvokeAction { id, key } => self.invoke_action(id, key),
             Event::HoverStart(id) => self.hover_start(id),
             Event::HoverEnd(id) => self.hover_end(id),
+        }
+    }
+
+    /// Starts the grace period if idle exit is on and nothing is live.
+    fn arm_idle(&mut self) -> Option<Effect> {
+        if !self.config.general.idle_exit || !self.is_idle() {
+            return None;
+        }
+        self.idle_armed = true;
+        Some(Effect::StartIdleTimer {
+            after: self.config.general.idle_grace,
+        })
+    }
+
+    /// Exits only if the grace period is still running: a Notification may
+    /// have cancelled it after the timer had already fired.
+    fn idle_elapsed(&mut self) -> Vec<Effect> {
+        if std::mem::take(&mut self.idle_armed) {
+            vec![Effect::Exit]
+        } else {
+            vec![]
         }
     }
 
@@ -211,13 +328,17 @@ impl Core {
         }
         self.last_id = self.last_id.wrapping_add(1).max(1);
         let id = self.last_id;
+        let expire = self.expiry(&n);
         let popup = Popup {
             id,
             app_name: n.app_name,
             summary: n.summary,
-            body: n.body,
+            body: markup::clean(&n.body),
             actions: buttons(&n.actions),
             more: 0,
+            body_lines: self.config.general.body_lines,
+            expire,
+            theme: self.theme(n.urgency),
         };
         self.set_actions(id, n.actions);
         if self.stack.len() >= self.max_visible {
@@ -226,26 +347,44 @@ impl Core {
         }
         self.stack.insert(0, popup);
         let mut effects = vec![Effect::Accepted(id), self.stack_effect()];
-        effects.extend(self.start_timer(id, self.config.general.timeout));
+        effects.extend(self.start_timer(id, expire));
         effects
+    }
+
+    /// How long a Notification stays up once shown: never for critical ones,
+    /// otherwise what the sender asked unless the config says to ignore it.
+    fn expiry(&self, n: &Notification) -> Option<Duration> {
+        let general = &self.config.general;
+        match (n.urgency, n.timeout) {
+            (Urgency::Critical, _) => None,
+            (_, Timeout::Never) if general.honor_app_timeouts => None,
+            (_, Timeout::After(after)) if general.honor_app_timeouts => Some(after),
+            _ => Some(general.timeout),
+        }
     }
 
     /// Updates the live Notification `n` replaces without moving it, or
     /// returns `None` if it replaces nothing that is still live.
     fn replace(&mut self, n: &Notification) -> Option<Vec<Effect>> {
         let id = n.replaces_id;
+        let expire = self.expiry(n);
+        let theme = self.theme(n.urgency);
         let update = |p: &mut Popup| {
             p.app_name.clone_from(&n.app_name);
             p.summary.clone_from(&n.summary);
-            p.body.clone_from(&n.body);
+            p.body = markup::clean(&n.body);
             p.actions = buttons(&n.actions);
+            p.expire = expire;
+            p.theme.clone_from(&theme);
         };
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
             update(popup);
             self.set_actions(id, n.actions.clone());
-            let mut effects = vec![Effect::Accepted(id), self.stack_effect()];
-            effects.extend(self.start_timer(id, self.config.general.timeout));
-            return Some(effects);
+            // A replacement that never expires must also stop the old timer.
+            let timer = self
+                .start_timer(id, expire)
+                .unwrap_or(Effect::CancelTimer(id));
+            return Some(vec![Effect::Accepted(id), self.stack_effect(), timer]);
         }
         let queued = self.queue.iter_mut().find(|p| p.id == id)?;
         update(queued);
@@ -255,7 +394,7 @@ impl Core {
 
     fn expire(&mut self, id: u32) -> Vec<Effect> {
         // A paused timeout has no timer; one that fired anyway is stale.
-        if !matches!(self.timeouts.get(&id), Some(Timeout::Running { .. })) {
+        if !matches!(self.timeouts.get(&id), Some(Countdown::Running { .. })) {
             return vec![];
         }
         self.remove(id, CloseReason::Expired, vec![])
@@ -318,34 +457,39 @@ impl Core {
     }
 
     /// Starts `id`'s timeout, or, while it is hovered, only resets what will
-    /// be left once the pointer goes.
-    fn start_timer(&mut self, id: u32, after: Duration) -> Option<Effect> {
-        if let Some(Timeout::Paused { remaining }) = self.timeouts.get_mut(&id) {
+    /// be left once the pointer goes. A Popup that never expires (`None`) has
+    /// no timeout at all.
+    fn start_timer(&mut self, id: u32, expire: Option<Duration>) -> Option<Effect> {
+        let Some(after) = expire else {
+            self.timeouts.remove(&id);
+            return None;
+        };
+        if let Some(Countdown::Paused { remaining }) = self.timeouts.get_mut(&id) {
             *remaining = after;
             return None;
         }
         let started = (self.clock.0)();
         self.timeouts
-            .insert(id, Timeout::Running { started, after });
+            .insert(id, Countdown::Running { started, after });
         Some(Effect::StartTimer { id, after })
     }
 
     fn hover_start(&mut self, id: u32) -> Vec<Effect> {
-        let Some(&Timeout::Running { started, after }) = self.timeouts.get(&id) else {
+        let Some(&Countdown::Running { started, after }) = self.timeouts.get(&id) else {
             return vec![];
         };
         let shown = (self.clock.0)().saturating_duration_since(started);
         let remaining = after.saturating_sub(shown);
-        self.timeouts.insert(id, Timeout::Paused { remaining });
+        self.timeouts.insert(id, Countdown::Paused { remaining });
         vec![Effect::CancelTimer(id)]
     }
 
     fn hover_end(&mut self, id: u32) -> Vec<Effect> {
-        let Some(&Timeout::Paused { remaining }) = self.timeouts.get(&id) else {
+        let Some(&Countdown::Paused { remaining }) = self.timeouts.get(&id) else {
             return vec![];
         };
         self.timeouts.remove(&id);
-        self.start_timer(id, remaining).into_iter().collect()
+        self.start_timer(id, Some(remaining)).into_iter().collect()
     }
 
     /// Empties the Stack and the Queue in one change, reporting each closed.
@@ -360,6 +504,7 @@ impl Core {
             id: p.id,
             reason: CloseReason::Dismissed,
         }));
+        effects.extend(self.arm_idle());
         effects
     }
 
@@ -382,6 +527,7 @@ impl Core {
         effects.push(self.stack_effect());
         effects.extend(started);
         effects.push(Effect::Closed { id, reason });
+        effects.extend(self.arm_idle());
         effects
     }
 
@@ -393,10 +539,15 @@ impl Core {
             let Some(popup) = self.queue.pop_front() else {
                 break;
             };
-            effects.extend(self.start_timer(popup.id, self.config.general.timeout));
+            effects.extend(self.start_timer(popup.id, popup.expire));
             self.stack.insert(0, popup);
         }
         effects
+    }
+
+    /// The Theme for a Notification of `urgency`.
+    fn theme(&self, urgency: Urgency) -> Theme {
+        self.config.theme().for_urgency(urgency)
     }
 
     /// The Stack as the renderer should show it, "+N more" on the last slot.

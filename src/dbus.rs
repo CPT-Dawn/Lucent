@@ -17,7 +17,7 @@ use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
 use dbus::channel::{BusType, Channel};
 use dbus::message::MessageType;
 
-use crate::core::{Action, Button, CloseReason, Effect, Event, Notification};
+use crate::core::{Action, Button, CloseReason, Effect, Event, Notification, Timeout, Urgency};
 use crate::debug;
 
 pub const NAME: &str = "org.freedesktop.Notifications";
@@ -28,7 +28,7 @@ const PATH: &str = "/org/freedesktop/Notifications";
 const TEST_INTERFACE: &str = "dev.cptdawn.Lucent.Test";
 
 /// Capabilities are added only in the change that implements them.
-const CAPABILITIES: [&str; 3] = ["actions", "body", "body-markup"];
+const CAPABILITIES: [&str; 4] = ["actions", "body", "body-hyperlinks", "body-markup"];
 
 /// The session bus went away; nothing more can be served.
 #[derive(Debug)]
@@ -84,6 +84,13 @@ impl DbusAdapter {
             .ok()?;
         let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
         Some(format!("{} (pid {pid})", comm.trim()))
+    }
+
+    /// Gives up the well-known name, so the bus activates a fresh Lucent for
+    /// the next call. Calls the bus routed here before the release may still
+    /// be queued: [`Self::process`] them before exiting.
+    pub fn release_name(&self) -> Result<(), dbus::Error> {
+        self.conn.release_name(NAME).map(drop)
     }
 
     /// The connection's fd, to be polled for readability. libdbus owns it.
@@ -202,7 +209,7 @@ impl DbusAdapter {
 
 fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
     // Signature susssasa{sv}i. The fields not used yet arrive with their tickets.
-    let (app_name, replaces_id, _app_icon, summary, body, actions, _hints, _timeout): (
+    let (app_name, replaces_id, _app_icon, summary, body, actions, hints, timeout): (
         String,
         u32,
         String,
@@ -228,6 +235,8 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
                 label: label.clone(),
             })
             .collect(),
+        urgency: urgency(&hints),
+        timeout: Timeout::from_millis(timeout),
     })
 }
 
@@ -270,6 +279,16 @@ fn test_hook(
     };
     pending.extend(handle(event));
     msg.method_return()
+}
+
+/// The `urgency` hint, a byte by the spec; some senders use other integer
+/// types, so any integer is accepted.
+fn urgency(hints: &PropMap) -> Urgency {
+    hints
+        .get("urgency")
+        .and_then(|v| v.0.as_u64())
+        .and_then(|u| u8::try_from(u).ok())
+        .map_or(Urgency::Normal, Urgency::from_byte)
 }
 
 fn unknown_method(msg: &Message) -> Message {

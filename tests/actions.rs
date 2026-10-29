@@ -7,8 +7,6 @@ fn with_actions(summary: &str, actions: &[(&str, &str)]) -> Notification {
     Notification {
         app_name: "mail".into(),
         summary: summary.into(),
-        body: String::new(),
-        replaces_id: 0,
         actions: actions
             .iter()
             .map(|(key, label)| Action {
@@ -16,6 +14,7 @@ fn with_actions(summary: &str, actions: &[(&str, &str)]) -> Notification {
                 label: (*label).into(),
             })
             .collect(),
+        ..Default::default()
     }
 }
 

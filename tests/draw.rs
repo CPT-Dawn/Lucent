@@ -2,6 +2,7 @@
 
 use lucent::core::{Action, Popup};
 use lucent::draw;
+use lucent::theme::Theme;
 
 const WIDTH: u32 = 360;
 
@@ -19,6 +20,9 @@ fn popup(labels: &[&str]) -> Popup {
             })
             .collect(),
         more: 0,
+        body_lines: 4,
+        expire: None,
+        theme: Theme::default(),
     }
 }
 
