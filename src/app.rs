@@ -3,6 +3,10 @@
 //! Lucent itself spawns no threads and runs no async runtime (ADR-0003): the
 //! D-Bus fd, the Wayland connection and the expiry timers are all sources on
 //! this one loop, which blocks until one of them is ready.
+//!
+//! Pango starts its own idle `[pango] fontconfig` helper thread the first
+//! time it lays out text, and offers no way to disable it. That thread is
+//! Pango's, not Lucent's; with drawing off (`LUCENT_NO_DRAW`) it never starts.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -14,6 +18,7 @@ use calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationTok
 
 use crate::core::{Core, Effect, Event};
 use crate::dbus::{self, DbusAdapter};
+use crate::wayland::Wayland;
 use crate::{debug, error};
 
 /// What the process should do once [`run`] returns.
@@ -27,6 +32,8 @@ pub enum Exit {
 struct App {
     core: Core,
     dbus: DbusAdapter,
+    /// `None` when drawing is off: the core and D-Bus still run unchanged.
+    wayland: Option<Wayland>,
     handle: LoopHandle<'static, App>,
     timers: HashMap<u32, RegistrationToken>,
     exit: bool,
@@ -42,6 +49,9 @@ impl AsFd for DbusFd {
         unsafe { BorrowedFd::borrow_raw(self.0) }
     }
 }
+
+/// Set (to anything) to run without a compositor, as the bus tests do.
+const NO_DRAW: &str = "LUCENT_NO_DRAW";
 
 pub fn run() -> Result<Exit, Box<dyn Error>> {
     let dbus = DbusAdapter::connect()?;
@@ -68,9 +78,24 @@ pub fn run() -> Result<Exit, Box<dyn Error>> {
         },
     )?;
 
+    let wayland = if std::env::var_os(NO_DRAW).is_some() {
+        debug!("{NO_DRAW} is set; drawing is off");
+        None
+    } else {
+        let (wayland, source) = Wayland::connect()?;
+        handle.insert_source(source, |(), queue, app: &mut App| {
+            match app.wayland.as_mut() {
+                Some(wayland) => queue.dispatch_pending(wayland),
+                None => Ok(0),
+            }
+        })?;
+        Some(wayland)
+    };
+
     let mut app = App {
         core: Core::new(),
         dbus,
+        wayland,
         handle,
         timers: HashMap::new(),
         exit: false,
@@ -104,6 +129,9 @@ impl App {
                 Effect::Accepted(_) => {}
                 Effect::Stack(stack) => {
                     debug!("stack now holds {} popup(s)", stack.len());
+                    if let Some(wayland) = self.wayland.as_mut() {
+                        wayland.show(&stack);
+                    }
                 }
                 Effect::StartTimer { id, after } => {
                     let token = self.handle.insert_source(

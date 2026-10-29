@@ -3,4 +3,6 @@
 pub mod app;
 pub mod core;
 pub mod dbus;
+pub mod draw;
 pub mod log;
+pub mod wayland;
