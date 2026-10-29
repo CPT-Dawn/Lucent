@@ -387,7 +387,7 @@ impl Core {
     /// the config says to ignore it.
     fn expiry(&self, n: &Notification) -> Option<Duration> {
         let general = &self.config.general;
-        let rule = self.config.rule_timeout(&n.app_name, n.urgency);
+        let rule = self.config.rule_timeout(n);
         match (n.urgency, n.timeout) {
             (Urgency::Critical, _) => None,
             _ if rule.is_some() => rule,
@@ -578,7 +578,7 @@ impl Core {
 
     /// The Theme for `n`, Rules and Urgency style included.
     fn theme(&self, n: &Notification) -> Theme {
-        self.config.theme_for(&n.app_name, n.urgency)
+        self.config.theme_for(n)
     }
 
     /// The Stack as the renderer should show it, "+N more" on the last slot.

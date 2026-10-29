@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
-use crate::core::{Button, Urgency};
+use crate::core::{Button, Notification, Urgency};
 use crate::theme::{Theme, ThemeOverride};
 use crate::{debug, error, xdg};
 
@@ -54,12 +54,12 @@ pub struct Rule {
 }
 
 impl Rule {
-    /// Whether this Rule applies to a Notification from `app_name` at `urgency`.
-    pub fn matches(&self, app_name: &str, urgency: Urgency) -> bool {
+    /// Whether this Rule applies to `n`, by its app name and Urgency.
+    pub fn matches(&self, n: &Notification) -> bool {
         self.app_name
             .as_ref()
-            .is_none_or(|name| name.to_lowercase() == app_name.to_lowercase())
-            && self.urgency.is_none_or(|u| u == urgency)
+            .is_none_or(|name| name.to_lowercase() == n.app_name.to_lowercase())
+            && self.urgency.is_none_or(|u| u == n.urgency)
     }
 }
 
@@ -237,29 +237,24 @@ impl Config {
         theme
     }
 
-    /// The Rules matching a Notification from `app_name` at `urgency`, in
-    /// file order, so later ones win.
-    pub fn rules_for(&self, app_name: &str, urgency: Urgency) -> impl Iterator<Item = &Rule> {
-        self.rules
-            .iter()
-            .filter(move |rule| rule.matches(app_name, urgency))
+    /// The Rules matching `n`, in file order, so later ones win.
+    pub fn rules_for(&self, n: &Notification) -> impl Iterator<Item = &Rule> {
+        self.rules.iter().filter(move |rule| rule.matches(n))
     }
 
-    /// The Theme for a Notification from `app_name` at `urgency`: `[theme]`,
-    /// then each matching Rule, then the Urgency style.
-    pub fn theme_for(&self, app_name: &str, urgency: Urgency) -> Theme {
+    /// The Theme for `n`: `[theme]`, then each matching Rule, then the
+    /// Urgency style.
+    pub fn theme_for(&self, n: &Notification) -> Theme {
         let mut theme = self.theme();
-        for rule in self.rules_for(app_name, urgency) {
+        for rule in self.rules_for(n) {
             rule.theme.apply(&mut theme);
         }
-        theme.for_urgency(urgency)
+        theme.for_urgency(n.urgency)
     }
 
     /// The timeout the last matching Rule sets, if any does.
-    pub fn rule_timeout(&self, app_name: &str, urgency: Urgency) -> Option<Duration> {
-        self.rules_for(app_name, urgency)
-            .filter_map(|rule| rule.timeout)
-            .last()
+    pub fn rule_timeout(&self, n: &Notification) -> Option<Duration> {
+        self.rules_for(n).filter_map(|rule| rule.timeout).last()
     }
 
     /// Resolves config text against the defaults. Never fails: anything
