@@ -145,6 +145,16 @@ impl DbusAdapter {
                     &CString::new(e.to_string()).unwrap_or_default(),
                 ),
             },
+            Some("CloseNotification") => match msg.read1::<u32>() {
+                Ok(id) => {
+                    pending.extend(handle(Event::Close(id)));
+                    msg.method_return()
+                }
+                Err(e) => msg.error(
+                    &"org.freedesktop.DBus.Error.InvalidArgs".into(),
+                    &CString::new(e.to_string()).unwrap_or_default(),
+                ),
+            },
             _ => unknown_method(msg),
         }
     }
@@ -165,7 +175,7 @@ impl DbusAdapter {
 
 fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
     // Signature susssasa{sv}i. The fields not used yet arrive with their tickets.
-    let (app_name, _replaces_id, _app_icon, summary, body, _actions, _hints, _timeout): (
+    let (app_name, replaces_id, _app_icon, summary, body, _actions, _hints, _timeout): (
         String,
         u32,
         String,
@@ -180,6 +190,7 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
         app_name,
         summary,
         body,
+        replaces_id,
     })
 }
 

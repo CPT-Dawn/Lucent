@@ -51,6 +51,10 @@ struct Surface {
     layer: LayerSurface,
     width: u32,
     height: u32,
+    /// Distance from the anchor edge, including the outer margin.
+    offset: i32,
+    /// Whether the first configure has arrived, so drawing is allowed.
+    configured: bool,
 }
 
 impl Wayland {
@@ -83,45 +87,37 @@ impl Wayland {
         Ok((wayland, WaylandSource::new(conn, queue)))
     }
 
-    /// Makes the on-screen Popups match `stack`.
+    /// Makes the on-screen Popups match `stack`, nearest the anchor first.
+    /// Popups whose content changed are redrawn in place; the rest are only
+    /// moved, and only if their position changed.
     pub fn show(&mut self, stack: &[Popup]) {
-        let mut old = std::mem::take(&mut self.surfaces);
-        for popup in stack {
-            match old.iter().position(|s| s.popup.id == popup.id) {
-                Some(index) => self.surfaces.push(old.swap_remove(index)),
+        // Dropping a LayerSurface destroys it.
+        self.surfaces
+            .retain(|s| stack.iter().any(|p| p.id == s.popup.id));
+        let mut offset = self.edge_margin();
+        for (index, popup) in stack.iter().enumerate() {
+            match self.surfaces.iter().position(|s| s.popup.id == popup.id) {
+                Some(at) => {
+                    self.surfaces.swap(index, at);
+                    self.update(index, popup, offset);
+                }
                 None => {
-                    let surface = self.open(popup.clone());
-                    self.surfaces.push(surface);
+                    let surface = self.open(popup.clone(), offset);
+                    self.surfaces.insert(index, surface);
                 }
             }
+            offset += px(self.surfaces[index].height + self.layout.gap);
         }
-        // Dropping a LayerSurface destroys it.
-        drop(old);
-        self.restack();
     }
 
-    /// Moves every Popup to its place: each one sits `gap` beyond the one
-    /// before it, away from the anchor edge.
-    fn restack(&mut self) {
-        let config::Margin {
-            top,
-            right,
-            bottom,
-            left,
-        } = self.layout.margin;
-        let mut offset = 0;
-        for surface in &self.surfaces {
-            let (top, bottom) = if self.layout.anchor.is_top() {
-                (top + offset, bottom)
-            } else {
-                (top, bottom + offset)
-            };
-            surface
-                .layer
-                .set_margin(px(top), px(right), px(bottom), px(left));
-            surface.layer.commit();
-            offset += surface.height + self.layout.gap;
-        }
+    /// The margin on the edge the Stack grows from.
+    fn edge_margin(&self) -> i32 {
+        let margin = self.layout.margin;
+        px(if self.layout.anchor.is_top() {
+            margin.top
+        } else {
+            margin.bottom
+        })
     }
 
     /// The output named by `[layout] monitor`, or `None` for the
@@ -150,7 +146,40 @@ impl Wayland {
         found
     }
 
-    fn open(&mut self, popup: Popup) -> Surface {
+    /// Brings an open Popup up to date with `popup` at `offset`.
+    fn update(&mut self, index: usize, popup: &Popup, offset: i32) {
+        let layout = &self.layout;
+        let surface = &mut self.surfaces[index];
+        let mut commit = false;
+        let mut redraw = false;
+        if surface.popup != *popup {
+            surface.popup = popup.clone();
+            let height = draw::measure(popup, surface.width);
+            if height != surface.height {
+                // The configure answering this commit redraws at the new size.
+                surface.height = height;
+                surface.layer.set_size(surface.width, height);
+                commit = true;
+            } else {
+                redraw = surface.configured;
+            }
+        }
+        if surface.offset != offset {
+            surface.offset = offset;
+            set_margin(&surface.layer, layout, offset);
+            commit = true;
+        }
+        if redraw {
+            // Drawing commits, which also carries any new margin.
+            if let Err(e) = self.draw(index) {
+                error!("could not redraw popup: {e}");
+            }
+        } else if commit {
+            surface.layer.commit();
+        }
+    }
+
+    fn open(&mut self, popup: Popup, offset: i32) -> Surface {
         let width = self.layout.width;
         let height = draw::measure(&popup, width);
         let output = self.output();
@@ -163,16 +192,19 @@ impl Wayland {
             output.as_ref(),
         );
         layer.set_anchor(anchor(self.layout.anchor));
+        set_margin(&layer, &self.layout, offset);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_size(width, height);
-        // `restack` sets the margin and makes the first commit, which
-        // carries no buffer; drawing waits for configure.
+        // The first commit carries no buffer; drawing waits for configure.
+        layer.commit();
         debug!("opened popup {} ({width}x{height})", popup.id);
         Surface {
             popup,
             layer,
             width,
             height,
+            offset,
+            configured: false,
         }
     }
 
@@ -222,6 +254,23 @@ fn anchor(anchor: config::Anchor) -> Anchor {
     }
 }
 
+/// Places a Popup `offset` pixels from the edge the Stack grows from; the
+/// other edges keep their configured margins.
+fn set_margin(layer: &LayerSurface, layout: &Layout, offset: i32) {
+    let config::Margin {
+        top,
+        right,
+        bottom,
+        left,
+    } = layout.margin;
+    let (top, bottom) = if layout.anchor.is_top() {
+        (offset, px(bottom))
+    } else {
+        (px(top), offset)
+    };
+    layer.set_margin(top, px(right), bottom, px(left));
+}
+
 /// Layer-shell margins are `i32`; config values sit far below its limit.
 fn px(value: u32) -> i32 {
     value.try_into().unwrap_or(i32::MAX)
@@ -245,7 +294,7 @@ impl LayerShellHandler for Wayland {
             return;
         };
         let surface = &mut self.surfaces[index];
-        let height = surface.height;
+        surface.configured = true;
         // Zero means "pick your own size": keep ours.
         if configure.new_size.0 != 0 {
             surface.width = configure.new_size.0;
@@ -253,12 +302,8 @@ impl LayerShellHandler for Wayland {
         if configure.new_size.1 != 0 {
             surface.height = configure.new_size.1;
         }
-        let moved = surface.height != height;
         if let Err(e) = self.draw(index) {
             error!("could not draw popup: {e}");
-        }
-        if moved {
-            self.restack();
         }
     }
 }
