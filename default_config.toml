@@ -128,9 +128,15 @@ left = 16
 # Width of the accent line, in pixels; 0 draws none.
 # accent_width = 3
 
-# Critical Notifications take this colour for their border and accent.
+# The progress bar a Notification with a "value" hint shows: its empty
+# track, and the part filled in.
+# progress_track = "rgba(252, 253, 253, 0.12)"
+# progress_fill = "#8DE3DC"
+
+# Critical Notifications take this colour for their border, accent and
+# progress fill.
 # critical = "#F7768E"
 
-# Low-urgency Notifications fade their text and accent to this opacity, in
-# percent, so they don't compete for attention.
+# Low-urgency Notifications fade their text, accent and progress fill to
+# this opacity, in percent, so they don't compete for attention.
 # low_opacity = 60
