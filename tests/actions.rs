@@ -1,5 +1,5 @@
-//! Seam 1, Action half: Action buttons as core events. No Wayland: the
-//! renderer only turns a press on a button into [`Event::InvokeAction`].
+//! Seam 1, Action half: Actions as core events. No Wayland: the renderer
+//! only turns a press on an Action into [`Event::InvokeAction`].
 
 use lucent::core::{Action, CloseReason, Core, Effect, Event, Notification};
 
@@ -42,7 +42,7 @@ fn invoke(id: u32, key: &str) -> Event {
 }
 
 #[test]
-fn clicking_an_action_button_invokes_its_key_then_dismisses() {
+fn clicking_an_action_invokes_its_key_then_dismisses() {
     let mut core = Core::new();
     let id = notify(
         &mut core,
@@ -69,7 +69,7 @@ fn clicking_an_action_button_invokes_its_key_then_dismisses() {
 }
 
 /// The Actions the last Stack in a batch of effects shows on `id`'s Popup.
-fn buttons(effects: &[Effect], id: u32) -> Vec<String> {
+fn shown_actions(effects: &[Effect], id: u32) -> Vec<String> {
     effects
         .iter()
         .rev()
@@ -85,7 +85,7 @@ fn buttons(effects: &[Effect], id: u32) -> Vec<String> {
 }
 
 #[test]
-fn the_popup_shows_every_action_but_the_default_as_a_button_in_order() {
+fn the_popup_shows_every_action_but_the_default_in_order() {
     let mut core = Core::new();
 
     let effects = core.handle(Event::Notify(with_actions(
@@ -101,11 +101,11 @@ fn the_popup_shows_every_action_but_the_default_as_a_button_in_order() {
         other => panic!("expected an id, got {other:?}"),
     };
 
-    assert_eq!(buttons(&effects, id), ["Reply", "Archive"]);
+    assert_eq!(shown_actions(&effects, id), ["Reply", "Archive"]);
 }
 
 #[test]
-fn a_replacement_swaps_the_buttons_for_its_own() {
+fn a_replacement_swaps_the_actions_for_its_own() {
     let mut core = Core::new();
     let id = notify(&mut core, with_actions("mail", &[("reply", "Reply")]));
 
@@ -113,6 +113,6 @@ fn a_replacement_swaps_the_buttons_for_its_own() {
     replacement.replaces_id = id;
     let effects = core.handle(Event::Notify(replacement));
 
-    assert_eq!(buttons(&effects, id), ["Snooze"]);
+    assert_eq!(shown_actions(&effects, id), ["Snooze"]);
     assert_eq!(core.handle(invoke(id, "reply")), [], "reply is gone");
 }

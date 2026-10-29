@@ -104,7 +104,7 @@ pub struct Popup {
     pub summary: String,
     pub body: String,
     pub image: Option<Image>,
-    /// The Actions to show as buttons, in the sender's order. The Default
+    /// The Actions to show, in the sender's order. The Default
     /// action is never among them: clicking the Popup itself runs that.
     pub actions: Vec<Action>,
     /// Notifications waiting in the Queue, shown as a "+N more" hint. Only the
@@ -148,7 +148,7 @@ pub enum Event {
         id: u32,
         button: Button,
     },
-    /// The user pressed the button for the Action `key` on this Popup.
+    /// The user invoked the Action `key` on this Popup.
     InvokeAction {
         id: u32,
         key: String,
@@ -188,8 +188,8 @@ fn progress(value: Option<i64>) -> Option<u8> {
     value.map(|v| v.clamp(0, 100) as u8)
 }
 
-/// The Actions that become buttons: all but the Default action.
-fn buttons(actions: &[Action]) -> Vec<Action> {
+/// The Actions a Popup shows: all but the Default action.
+fn shown_actions(actions: &[Action]) -> Vec<Action> {
     actions
         .iter()
         .filter(|a| a.key != DEFAULT_ACTION)
@@ -343,7 +343,7 @@ impl Core {
             summary: n.summary,
             body: markup::clean(&n.body),
             image: n.image,
-            actions: buttons(&n.actions),
+            actions: shown_actions(&n.actions),
             more: 0,
             body_lines: self.config.general.body_lines,
             expire,
@@ -387,7 +387,7 @@ impl Core {
             p.summary.clone_from(&n.summary);
             p.body = markup::clean(&n.body);
             p.image.clone_from(&n.image);
-            p.actions = buttons(&n.actions);
+            p.actions = shown_actions(&n.actions);
             p.expire = expire;
             p.value = progress(n.value);
             p.theme.clone_from(&theme);

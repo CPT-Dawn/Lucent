@@ -65,7 +65,7 @@ impl DbusAdapter {
 
     /// Serves [`TEST_INTERFACE`]: `Click(u id, s button)` with `left`,
     /// `middle` or `right` acts as a pointer press on that Popup, and
-    /// `InvokeAction(u id, s key)` as a press on its button for Action `key`.
+    /// `InvokeAction(u id, s key)` as a press on its Action `key`.
     #[cfg(feature = "test-hooks")]
     pub fn with_test_hooks(mut self) -> Self {
         self.test_hooks = true;

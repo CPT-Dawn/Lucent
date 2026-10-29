@@ -21,14 +21,14 @@ fn text_left(popup: &Popup, icon: Option<&ImageSurface>) -> f64 {
     let padding = f64::from(popup.theme.padding);
     icon.map_or(padding, |icon| padding + icon.width() as f64 + ICON_GAP)
 }
-/// Action buttons: at most this many share a row; more wrap below.
-const BUTTONS_PER_ROW: usize = 3;
-const BUTTON_HEIGHT: f64 = 28.0;
-const BUTTON_GAP: f64 = 8.0;
-const BUTTON_RADIUS: f64 = 10.0;
-const BUTTON_PADDING: f64 = 8.0;
-/// How strongly a resting button is filled, in percent of the summary colour.
-const BUTTON_WASH: u8 = 10;
+/// Actions: at most this many share a row; more wrap below.
+const ACTIONS_PER_ROW: usize = 3;
+const ACTION_HEIGHT: f64 = 28.0;
+const ACTION_GAP: f64 = 8.0;
+const ACTION_RADIUS: f64 = 10.0;
+const ACTION_PADDING: f64 = 8.0;
+/// How strongly a resting Action is filled, in percent of the summary colour.
+const ACTION_WASH: u8 = 10;
 
 /// The text blocks of a Popup, top to bottom, with their colours.
 fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, Rgba)> {
@@ -145,35 +145,35 @@ fn measure_body(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Lays out `count` buttons below a body `body_height` tall, inset by
-/// `padding`: rows of up to [`BUTTONS_PER_ROW`], each row's buttons sharing
+/// Lays out `count` Actions below a body `body_height` tall, inset by
+/// `padding`: rows of up to [`ACTIONS_PER_ROW`], each row's Actions sharing
 /// the full inner width equally, under the icon as well as the text.
-fn button_rects(count: usize, body_height: f64, width: u32, padding: f64) -> Vec<Rect> {
+fn layout_actions(count: usize, body_height: f64, width: u32, padding: f64) -> Vec<Rect> {
     let inner = (width as f64 - 2.0 * padding).max(0.0);
-    let top = padding + body_height + BUTTON_GAP;
+    let top = padding + body_height + ACTION_GAP;
     (0..count)
         .map(|i| {
-            let row = i / BUTTONS_PER_ROW;
-            let in_row = (count - row * BUTTONS_PER_ROW).min(BUTTONS_PER_ROW) as f64;
-            let column = (i % BUTTONS_PER_ROW) as f64;
-            let w = ((inner - BUTTON_GAP * (in_row - 1.0)) / in_row).max(0.0);
+            let row = i / ACTIONS_PER_ROW;
+            let in_row = (count - row * ACTIONS_PER_ROW).min(ACTIONS_PER_ROW) as f64;
+            let column = (i % ACTIONS_PER_ROW) as f64;
+            let w = ((inner - ACTION_GAP * (in_row - 1.0)) / in_row).max(0.0);
             Rect {
-                x: padding + column * (w + BUTTON_GAP),
-                y: top + row as f64 * (BUTTON_HEIGHT + BUTTON_GAP),
+                x: padding + column * (w + ACTION_GAP),
+                y: top + row as f64 * (ACTION_HEIGHT + ACTION_GAP),
                 width: w,
-                height: BUTTON_HEIGHT,
+                height: ACTION_HEIGHT,
             }
         })
         .collect()
 }
 
-/// Where each of the Popup's Action buttons sits at `width`, in order.
-pub fn buttons(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> Vec<Rect> {
+/// Where each of the Popup's Actions sits at `width`, in order.
+pub fn action_rects(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> Vec<Rect> {
     if popup.actions.is_empty() {
         return Vec::new();
     }
     let padding = f64::from(popup.theme.padding);
-    button_rects(
+    layout_actions(
         popup.actions.len(),
         measure_body(popup, icon, width),
         width,
@@ -185,14 +185,14 @@ pub fn buttons(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> Vec<Re
 pub fn measure(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> u32 {
     let padding = f64::from(popup.theme.padding);
     let body = measure_body(popup, icon, width);
-    let bottom = button_rects(popup.actions.len(), body, width, padding)
+    let bottom = layout_actions(popup.actions.len(), body, width, padding)
         .last()
         .map_or(padding + body, |b| b.y + b.height);
     (bottom + padding).ceil() as u32
 }
 
 /// Paints the whole Popup over every pixel of `cr`'s `width`×`height` target,
-/// with the Action button at index `hovered` in the accent colour.
+/// with the Action at index `hovered` in the accent colour.
 pub fn paint(
     cr: &Context,
     popup: &Popup,
@@ -266,10 +266,10 @@ pub fn paint(
     }
 
     let body = body_height(&blocks, popup, icon);
-    let rects = button_rects(popup.actions.len(), body, width, padding);
-    let button_radius = BUTTON_RADIUS.min(f64::from(theme.radius));
+    let rects = layout_actions(popup.actions.len(), body, width, padding);
+    let action_radius = ACTION_RADIUS.min(f64::from(theme.radius));
     for (index, (action, rect)) in popup.actions.iter().zip(&rects).enumerate() {
-        // Resting buttons are a faint wash of the summary colour, so they
+        // Resting Actions are a faint wash of the summary colour, so they
         // suit light and dark Themes alike; the hovered one takes the
         // accent, its label the background made opaque.
         let (fill, text) = if hovered == Some(index) {
@@ -281,9 +281,9 @@ pub fn paint(
                 },
             )
         } else {
-            (theme.summary.faded(BUTTON_WASH), theme.summary)
+            (theme.summary.faded(ACTION_WASH), theme.summary)
         };
-        rounded_rect(cr, rect.x, rect.y, rect.width, rect.height, button_radius);
+        rounded_rect(cr, rect.x, rect.y, rect.width, rect.height, action_radius);
         set_source(cr, fill);
         cr.fill()?;
 
@@ -293,7 +293,7 @@ pub fn paint(
             "{} Medium {}",
             theme.font, theme.app_name_size
         ))));
-        let label_width = (rect.width - 2.0 * BUTTON_PADDING).max(0.0);
+        let label_width = (rect.width - 2.0 * ACTION_PADDING).max(0.0);
         label.set_width((label_width * pango::SCALE as f64) as i32);
         label.set_ellipsize(EllipsizeMode::End);
         label.set_single_paragraph_mode(true);
@@ -301,7 +301,7 @@ pub fn paint(
         label.set_text(&action.label);
         let label_height = label.pixel_extents().1.height() as f64;
         cr.move_to(
-            rect.x + BUTTON_PADDING,
+            rect.x + ACTION_PADDING,
             rect.y + (rect.height - label_height) / 2.0,
         );
         set_source(cr, text);

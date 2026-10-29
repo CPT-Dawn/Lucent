@@ -669,7 +669,7 @@ fn clicking_a_notification_with_a_default_action_invokes_it_then_dismisses() {
 
 #[test]
 #[cfg(feature = "test-hooks")]
-fn pressing_an_action_button_invokes_its_key_then_dismisses() {
+fn pressing_an_action_invokes_its_key_then_dismisses() {
     let bus = Bus::new();
     let _lucent = bus.spawn_lucent();
     let client = bus.client();
@@ -694,7 +694,7 @@ fn pressing_an_action_button_invokes_its_key_then_dismisses() {
             ),
         )
         .unwrap();
-    // With drawing off there are no buttons; this test-only call stands in.
+    // With drawing off there are no Actions on screen; this test-only call stands in.
     let () = notifications(&client)
         .method_call("dev.cptdawn.Lucent.Test", "InvokeAction", (id, "reply"))
         .unwrap();

@@ -76,7 +76,7 @@ fn the_icon_is_painted_at_the_top_left_inside_the_padding() {
 
 #[test]
 fn a_popup_without_actions_has_no_buttons() {
-    assert_eq!(draw::buttons(&popup(&[]), None, WIDTH), []);
+    assert_eq!(draw::action_rects(&popup(&[]), None, WIDTH), []);
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn up_to_three_buttons_share_one_row_below_the_text() {
     let without = draw::measure(&popup(&[]), None, WIDTH);
     let p = popup(&["Reply", "Archive", "Mark as read"]);
 
-    let buttons = draw::buttons(&p, None, WIDTH);
+    let buttons = draw::action_rects(&p, None, WIDTH);
 
     assert_eq!(buttons.len(), 3);
     assert!(buttons.iter().all(|b| b.y == buttons[0].y), "{buttons:?}");
@@ -103,7 +103,7 @@ fn a_fourth_button_wraps_to_a_new_row_and_all_stay_inside_the_popup() {
     ]);
     let height = f64::from(draw::measure(&p, None, WIDTH));
 
-    let buttons = draw::buttons(&p, None, WIDTH);
+    let buttons = draw::action_rects(&p, None, WIDTH);
 
     assert_eq!(buttons.len(), 4);
     assert!(buttons[3].y > buttons[0].y, "{buttons:?}");
@@ -117,7 +117,7 @@ fn a_fourth_button_wraps_to_a_new_row_and_all_stay_inside_the_popup() {
 #[test]
 fn hit_testing_finds_the_button_under_the_pointer() {
     let p = popup(&["Reply", "Archive"]);
-    let buttons = draw::buttons(&p, None, WIDTH);
+    let buttons = draw::action_rects(&p, None, WIDTH);
     let centre = |b: &draw::Rect| (b.x + b.width / 2.0, b.y + b.height / 2.0);
 
     let at = |x: f64, y: f64| buttons.iter().position(|b| b.contains(x, y));
@@ -132,7 +132,7 @@ fn buttons_sit_below_an_icon_taller_than_the_text() {
     let icon = red_icon(96);
     let p = popup(&["Reply"]);
 
-    let buttons = draw::buttons(&p, Some(&icon), WIDTH);
+    let buttons = draw::action_rects(&p, Some(&icon), WIDTH);
 
     assert!(buttons[0].y >= 16.0 + 96.0, "{buttons:?}");
     assert!(f64::from(draw::measure(&p, Some(&icon), WIDTH)) >= buttons[0].y + buttons[0].height);
