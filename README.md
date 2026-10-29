@@ -35,10 +35,10 @@
   </tr>
 </table>
 
-<sub>Captured with <code>grim</code> on Hyprland 0.57 using the layer rule from
-<a href="#blur-and-animation">Blur and animation</a>, over a test pattern.
-The Popups are the <code>notify-send</code> commands from
-<a href="#usage">Usage</a>, with Breeze icons.</sub>
+<sub>Captured with <code>grim</code> on Hyprland 0.57 over a test pattern,
+with the blur Lucent asks for itself and no layer rule. The Popups are the
+<code>notify-send</code> commands from <a href="#usage">Usage</a>, with Breeze
+icons (Breeze Dark on the dark Presets).</sub>
 
 ## Benchmark
 
