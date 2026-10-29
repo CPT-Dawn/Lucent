@@ -48,7 +48,8 @@ pub enum Button {
 }
 
 /// The sender-declared importance of a Notification.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Urgency {
     Low,
     #[default]
@@ -311,6 +312,7 @@ impl Core {
         self.last_id = self.last_id.wrapping_add(1).max(1);
         let id = self.last_id;
         let expire = self.expiry(&n);
+        let theme = self.theme(&n);
         self.set_actions(id, n.actions);
         let popup = Popup {
             id,
@@ -320,7 +322,7 @@ impl Core {
             more: 0,
             body_lines: self.config.general.body_lines,
             expire,
-            theme: self.theme(n.urgency),
+            theme,
         };
         if self.stack.len() >= self.max_visible {
             self.queue.push_back(popup);
@@ -333,11 +335,14 @@ impl Core {
     }
 
     /// How long a Notification stays up once shown: never for critical ones,
-    /// otherwise what the sender asked unless the config says to ignore it.
+    /// otherwise a matching Rule's timeout, else what the sender asked unless
+    /// the config says to ignore it.
     fn expiry(&self, n: &Notification) -> Option<Duration> {
         let general = &self.config.general;
+        let rule = self.config.rule_timeout(&n.app_name, n.urgency);
         match (n.urgency, n.timeout) {
             (Urgency::Critical, _) => None,
+            _ if rule.is_some() => rule,
             (_, Timeout::Never) if general.honor_app_timeouts => None,
             (_, Timeout::After(after)) if general.honor_app_timeouts => Some(after),
             _ => Some(general.timeout),
@@ -349,7 +354,7 @@ impl Core {
     fn replace(&mut self, n: &Notification) -> Option<Vec<Effect>> {
         let id = n.replaces_id;
         let expire = self.expiry(n);
-        let theme = self.theme(n.urgency);
+        let theme = self.theme(n);
         let update = |p: &mut Popup| {
             p.app_name.clone_from(&n.app_name);
             p.summary.clone_from(&n.summary);
@@ -510,9 +515,9 @@ impl Core {
         effects
     }
 
-    /// The Theme for a Notification of `urgency`.
-    fn theme(&self, urgency: Urgency) -> Theme {
-        self.config.theme().for_urgency(urgency)
+    /// The Theme for `n`, Rules and Urgency style included.
+    fn theme(&self, n: &Notification) -> Theme {
+        self.config.theme_for(&n.app_name, n.urgency)
     }
 
     /// The Stack as the renderer should show it, "+N more" on the last slot.
