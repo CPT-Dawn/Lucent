@@ -42,21 +42,21 @@ The Popups are the <code>notify-send</code> commands from
 
 ## Benchmark
 
-Measured on 2026-10-29: Intel Core i7-13700HX, 31 GiB RAM, Linux
+Measured on 2026-10-30: Intel Core i7-13700HX, 31 GiB RAM, Linux
 7.2.11-arch1-1, Hyprland 0.57.0, with `bench/benchmark.py --runs 10
 --idle-seconds 60`. Latencies are medians.
 
 | Daemon | Version | Binary size | Idle RSS | Idle wakeups | Peak RSS, 5 Popups | PSS, 5 Popups | Cold start | Warm |
 |---|---|--:|--:|--:|--:|--:|--:|--:|
-| **lucent** | 1.1.0 (be7e4e3)[^ver] | 1.8 MiB | **0 (not running)** | **0** | 24.5 MiB | 9.6 MiB | 28.0 ms | 6.7 ms |
-| lucent (resident) | 1.1.0 (be7e4e3)[^ver] | 1.8 MiB | 9.1 MiB | 0 | 24.4 MiB | 9.6 MiB | 31.1 ms | 6.8 ms |
-| mako | 1.11.0-1 | 91 KiB | 8.7 MiB | 0 | 22.9 MiB | 8.0 MiB | 25.7 ms | 6.1 ms |
-| dunst | 1.13.2-3 | 207 KiB | 11.1 MiB | 63 | 30.5 MiB | 11.2 MiB | 14.8 ms[^dunst] | 9.8 ms |
-| swaync | 0.12.6-1 | 615 KiB | 47.1 MiB | 0 | 307.4 MiB | 220.8 MiB | 231.2 ms | 43.5 ms |
-| fnott | 1.8.0-1 | 187 KiB | 14.6 MiB | 0 | 20.6 MiB | 7.4 MiB | 31.3 ms | 5.8 ms |
+| **lucent** | 2.0.0 | 1.9 MiB[^size] | **0 (not running)** | **0** | 24.4 MiB | 9.4 MiB | 27.9 ms | 7.3 ms |
+| lucent (resident) | 2.0.0 | 1.9 MiB[^size] | 9.3 MiB | 0 | 24.6 MiB | 9.4 MiB | 30.5 ms | 6.7 ms |
+| mako | 1.11.0-1 | 91 KiB | 8.8 MiB | 0 | 22.9 MiB | 7.7 MiB | 28.1 ms | 5.8 ms |
+| dunst | 1.13.2-3 | 207 KiB | 10.9 MiB | 0 | 30.0 MiB | 10.7 MiB | 14.3 ms[^dunst] | 9.3 ms |
+| swaync | 0.12.6-1 | 615 KiB | 47.2 MiB | 0 | 309.1 MiB | 154.1 MiB | 226.4 ms | 40.0 ms |
+| fnott | 1.8.0-1 | 187 KiB | 14.6 MiB | 0 | 20.7 MiB | 7.0 MiB | 29.3 ms | 6.3 ms |
 
-[^ver]: A build of the `v2` branch at commit be7e4e3, before its version
-    number was bumped.
+[^size]: A plain `cargo build --release`. The AUR package links with packed
+    relocations and comes out about 120 KiB smaller.
 [^dunst]: Too good to be true. dunst attaches a buffer to its 24×24 cursor
     surface as it starts, about 31 ms before it draws the Popup, and the
     benchmark takes that first commit for the Popup's first frame (a limit
@@ -77,7 +77,10 @@ What the table says, plainly:
   about 9 MiB.
 - **While showing Popups**, fnott and mako use about 2 MiB less PSS than
   Lucent, and less peak RSS too. Lucent's binary is also the largest here.
-- **Latency** is on par with mako and fnott, warm or cold. Cold start is the
+  These figures are at scale 1; on a HiDPI monitor every daemon that draws
+  at full resolution needs more pixels for its buffers.
+- **Latency** is on par with mako and fnott, warm or cold: Lucent's cold start
+  now matches mako's. Cold start is still the
   price of Idle exit: the first Notification after a quiet spell starts a
   process, which costs about 20 ms more than a warm one.
 
