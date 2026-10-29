@@ -32,7 +32,7 @@ use wayland_client::{Connection, QueueHandle};
 use crate::config::{self, Layout};
 use crate::core::{Button, Event, Popup};
 use crate::icon::Icons;
-use crate::{debug, draw, error, warn};
+use crate::{debug, draw, error};
 
 /// The layer namespace compositor rules can target.
 const NAMESPACE: &str = "lucent";
@@ -52,7 +52,7 @@ pub struct Wayland {
     layout: Layout,
     /// Set once a missing `[layout] monitor` has been reported, so the log
     /// says it once rather than per Popup.
-    warned_monitor: bool,
+    reported_monitor: bool,
     /// In Stack order: the first is closest to the anchor.
     surfaces: Vec<Surface>,
 }
@@ -99,7 +99,7 @@ impl Wayland {
             pool,
             qh,
             layout,
-            warned_monitor: false,
+            reported_monitor: false,
             surfaces: Vec::new(),
         };
         // One more roundtrip so output names are known before the first Popup.
@@ -155,18 +155,18 @@ impl Wayland {
                 .is_some_and(|info| info.name.as_deref() == Some(name))
         });
         if found.is_some() {
-            self.warned_monitor = false;
-        } else if !self.warned_monitor {
+            self.reported_monitor = false;
+        } else if !self.reported_monitor {
             let known: Vec<String> = self
                 .outputs
                 .outputs()
                 .filter_map(|o| self.outputs.info(&o).and_then(|i| i.name))
                 .collect();
-            warn!(
+            error!(
                 "no monitor named `{name}` (have: {}); letting the compositor choose",
                 known.join(", ")
             );
-            self.warned_monitor = true;
+            self.reported_monitor = true;
         }
         found
     }

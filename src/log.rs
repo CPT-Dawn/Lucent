@@ -1,5 +1,7 @@
 //! Stderr logging without a framework: errors always, debug output only with
-//! `LUCENT_LOG=debug`.
+//! `LUCENT_LOG=debug`. There is no level in between: a config problem the
+//! user can fix (an unknown key, Preset or monitor) is an error, and
+//! anything else worth saying is debug output.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -19,14 +21,6 @@ pub fn verbose() -> bool {
 macro_rules! error {
     ($($arg:tt)*) => {
         eprintln!("lucent: error: {}", format_args!($($arg)*))
-    };
-}
-
-/// Something the user set up that Lucent worked around; shown by default.
-#[macro_export]
-macro_rules! warn {
-    ($($arg:tt)*) => {
-        eprintln!("lucent: warning: {}", format_args!($($arg)*))
     };
 }
 
