@@ -226,6 +226,17 @@ Lucent draws a translucent Popup and leaves blur and enter/exit animation to
 the compositor, so it never draws a frame it doesn't need. Every Popup is a
 layer surface with the namespace `lucent`.
 
+| Compositor | Blur | Enter/exit animation |
+| --- | --- | --- |
+| Hyprland | yes | yes (`slide`, `popin`, `fade`) |
+| SwayFX | yes | no: its `animation_duration_ms` covers windows only |
+| Sway | no | no |
+| niri | yes (26.04+) | no: niri's animations cover windows, workspaces and its own UI, and no `layer-rule` property animates a layer surface |
+
+Lucent won't fake an animation on the compositors that lack one: drawing
+its own frames would cost the wakeups it exists to avoid. On those, Popups
+appear and disappear at once.
+
 ### Hyprland
 
 Hyprland 0.55 and later (`hyprland.lua`):
@@ -270,7 +281,9 @@ layer_effects "lucent" {
 }
 ```
 
-Neither animates layer surfaces.
+Neither animates layer surfaces: SwayFX's `animation_duration_ms` applies
+to opening and closing windows only, and `layer_effects` has no animation
+setting.
 
 ### niri
 
@@ -287,7 +300,9 @@ layer-rule {
 ```
 
 `geometry-corner-radius` rounds the blur to match the Popup; change it if
-you change `radius`. niri does not animate layer surfaces.
+you change `radius`. niri has no layer-surface animation: none of its
+`animations` (`window-open`, `window-close` and the rest) applies to layer
+surfaces, and `layer-rule` has no animation property.
 
 ## Switching from mako, dunst or swaync
 
