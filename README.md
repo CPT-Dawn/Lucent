@@ -48,8 +48,8 @@ Measured on 2026-10-30: Intel Core i7-13700HX, 31 GiB RAM, Linux
 
 | Daemon | Version | Binary size | Idle RSS | Idle wakeups | Peak RSS, 5 Popups | PSS, 5 Popups | Cold start | Warm |
 |---|---|--:|--:|--:|--:|--:|--:|--:|
-| **lucent** | 2.0.0 | 1.9 MiB[^size] | **0 (not running)** | **0** | 24.4 MiB | 9.4 MiB | 27.9 ms | 7.3 ms |
-| lucent (resident) | 2.0.0 | 1.9 MiB[^size] | 9.3 MiB | 0 | 24.6 MiB | 9.4 MiB | 30.5 ms | 6.7 ms |
+| **lucent** | 2.0.1 | 1.9 MiB[^size] | **0 (not running)** | **0** | 24.4 MiB | 9.4 MiB | 27.9 ms | 7.3 ms |
+| lucent (resident) | 2.0.1 | 1.9 MiB[^size] | 9.3 MiB | 0 | 24.6 MiB | 9.4 MiB | 30.5 ms | 6.7 ms |
 | mako | 1.11.0-1 | 91 KiB | 8.8 MiB | 0 | 22.9 MiB | 7.7 MiB | 28.1 ms | 5.8 ms |
 | dunst | 1.13.2-3 | 207 KiB | 10.9 MiB | 0 | 30.0 MiB | 10.7 MiB | 14.3 ms[^dunst] | 9.3 ms |
 | swaync | 0.12.6-1 | 615 KiB | 47.2 MiB | 0 | 309.1 MiB | 154.1 MiB | 226.4 ms | 40.0 ms |
