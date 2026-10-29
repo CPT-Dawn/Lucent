@@ -11,6 +11,7 @@ fn hello() -> Notification {
         summary: "Hello".into(),
         body: "World".into(),
         replaces_id: 0,
+        actions: vec![],
     }
 }
 

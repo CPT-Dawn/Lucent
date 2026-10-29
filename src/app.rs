@@ -55,7 +55,12 @@ impl AsFd for DbusFd {
 const NO_DRAW: &str = "LUCENT_NO_DRAW";
 
 pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
-    let dbus = DbusAdapter::connect()?;
+    let no_draw = std::env::var_os(NO_DRAW).is_some();
+    let mut dbus = DbusAdapter::connect()?;
+    if no_draw {
+        // No pointer without a compositor: let the bus tests click instead.
+        dbus.enable_test_hooks();
+    }
     if let Err(owner) = dbus.acquire_name()? {
         error!(
             "{} is already owned by {owner}; stop it to use Lucent",
@@ -79,16 +84,21 @@ pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
         },
     )?;
 
-    let wayland = if std::env::var_os(NO_DRAW).is_some() {
+    let wayland = if no_draw {
         debug!("{NO_DRAW} is set; drawing is off");
         None
     } else {
         let (wayland, source) = Wayland::connect(config.layout.clone())?;
         handle.insert_source(source, |(), queue, app: &mut App| {
-            match app.wayland.as_mut() {
-                Some(wayland) => queue.dispatch_pending(wayland),
-                None => Ok(0),
+            let Some(wayland) = app.wayland.as_mut() else {
+                return Ok(0);
+            };
+            let dispatched = queue.dispatch_pending(wayland)?;
+            for event in wayland.take_events() {
+                let effects = app.core.handle(event);
+                app.apply(effects);
             }
+            Ok(dispatched)
         })?;
         Some(wayland)
     };
@@ -159,6 +169,7 @@ impl App {
                     }
                 }
                 Effect::Closed { id, reason } => self.dbus.emit_closed(id, reason),
+                Effect::ActionInvoked { id, key } => self.dbus.emit_action_invoked(id, &key),
             }
         }
     }

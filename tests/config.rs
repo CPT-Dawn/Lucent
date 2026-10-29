@@ -3,13 +3,16 @@
 
 use std::time::Duration;
 
-use lucent::config::{Anchor, Config, General, Layout, Margin, Problem};
+use lucent::config::{Anchor, ClickAction, Config, General, Layout, Margin, Problem};
 
 fn defaults() -> Config {
     Config {
         general: General {
             timeout: Duration::from_secs(5),
             max_visible: 5,
+            left_click: ClickAction::InvokeDefaultAction,
+            middle_click: ClickAction::Dismiss,
+            right_click: ClickAction::DismissAll,
         },
         layout: Layout {
             anchor: Anchor::TopRight,
@@ -58,6 +61,9 @@ fn a_full_config_sets_every_field() {
         [general]
         timeout = 2500
         max_visible = 3
+        left_click = "dismiss-all"
+        middle_click = "none"
+        right_click = "invoke-default-action"
 
         [layout]
         anchor = "bottom-center"
@@ -79,6 +85,9 @@ fn a_full_config_sets_every_field() {
             general: General {
                 timeout: Duration::from_millis(2500),
                 max_visible: 3,
+                left_click: ClickAction::DismissAll,
+                middle_click: ClickAction::None,
+                right_click: ClickAction::InvokeDefaultAction,
             },
             layout: Layout {
                 anchor: Anchor::BottomCenter,

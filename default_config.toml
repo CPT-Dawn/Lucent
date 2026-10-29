@@ -20,6 +20,17 @@ timeout = 5000
 # appear as earlier ones close.
 max_visible = 5
 
+# What a click on a Popup does, per mouse button. One of:
+#   "invoke-default-action"  run the app's default action, if it has one,
+#                            then dismiss the Popup
+#   "dismiss"                dismiss the Popup without running anything
+#   "dismiss-all"            dismiss every Popup, and any waiting their turn
+#   "none"                   do nothing
+# Hovering a Popup pauses its timeout; it resumes when the pointer leaves.
+left_click = "invoke-default-action"
+middle_click = "dismiss"
+right_click = "dismiss-all"
+
 
 [layout]
 

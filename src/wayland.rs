@@ -4,6 +4,10 @@
 //! A Popup is drawn once per configure, never per frame; animation is the
 //! compositor's job (ADR-0001). Where the Stack sits comes from `[layout]`:
 //! the first Popup touches the anchor and each next one sits further away.
+//!
+//! Pointer input on a Popup becomes core [`Event`]s, collected during
+//! dispatch for the app to drain with [`Wayland::take_events`]. Popups never
+//! take keyboard focus.
 
 use std::error::Error;
 
@@ -11,6 +15,10 @@ use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::pointer::{
+    BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, PointerEvent, PointerEventKind, PointerHandler,
+};
+use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
@@ -20,11 +28,11 @@ use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
 use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::{wl_output, wl_shm, wl_surface};
+use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
 use crate::config::{self, Layout};
-use crate::core::Popup;
+use crate::core::{Button, Event, Popup};
 use crate::{debug, draw, error, warn};
 
 /// The layer namespace compositor rules can target.
@@ -33,6 +41,10 @@ const NAMESPACE: &str = "lucent";
 pub struct Wayland {
     registry: RegistryState,
     outputs: OutputState,
+    seats: SeatState,
+    pointer: Option<wl_pointer::WlPointer>,
+    /// Pointer input waiting for the app, oldest first.
+    events: Vec<Event>,
     compositor: CompositorState,
     layer_shell: LayerShell,
     shm: Shm,
@@ -73,6 +85,9 @@ impl Wayland {
         let mut wayland = Self {
             registry: RegistryState::new(&globals),
             outputs: OutputState::new(&globals, &qh),
+            seats: SeatState::new(&globals, &qh),
+            pointer: None,
+            events: Vec::new(),
             compositor,
             layer_shell,
             shm,
@@ -108,6 +123,11 @@ impl Wayland {
             }
             offset += px(self.surfaces[index].height + self.layout.gap);
         }
+    }
+
+    /// Pointer input on Popups since the last call, as core events.
+    pub fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events)
     }
 
     /// The margin on the edge the Stack grows from.
@@ -361,6 +381,87 @@ impl OutputHandler for Wayland {
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
+impl SeatHandler for Wayland {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seats
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            match self.seats.get_pointer(qh, &seat) {
+                Ok(pointer) => self.pointer = Some(pointer),
+                Err(e) => error!("could not use the pointer: {e}"),
+            }
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer
+            && let Some(pointer) = self.pointer.take()
+        {
+            pointer.release();
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for Wayland {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            let Some(id) = self
+                .surfaces
+                .iter()
+                .find(|s| s.layer.wl_surface() == &event.surface)
+                .map(|s| s.popup.id)
+            else {
+                continue;
+            };
+            let event = match event.kind {
+                PointerEventKind::Enter { .. } => Event::HoverStart(id),
+                PointerEventKind::Leave { .. } => Event::HoverEnd(id),
+                PointerEventKind::Press { button, .. } => match button {
+                    BTN_LEFT => Event::Click {
+                        id,
+                        button: Button::Left,
+                    },
+                    BTN_MIDDLE => Event::Click {
+                        id,
+                        button: Button::Middle,
+                    },
+                    BTN_RIGHT => Event::Click {
+                        id,
+                        button: Button::Right,
+                    },
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            self.events.push(event);
+        }
+    }
+}
+
 impl ShmHandler for Wayland {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
@@ -371,7 +472,7 @@ impl ProvidesRegistryState for Wayland {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_registry!(Wayland);
