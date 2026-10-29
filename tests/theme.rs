@@ -12,6 +12,7 @@ fn notification(urgency: Urgency) -> Notification {
         body: "World".into(),
         replaces_id: 0,
         urgency,
+        actions: vec![],
     }
 }
 

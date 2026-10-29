@@ -13,6 +13,7 @@ fn hello() -> Notification {
         body: "World".into(),
         replaces_id: 0,
         urgency: Urgency::Normal,
+        actions: vec![],
     }
 }
 
