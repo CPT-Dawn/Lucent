@@ -132,6 +132,13 @@ impl Core {
         self
     }
 
+    /// Whether the Stack and Queue are both empty. After [`Effect::Exit`] the
+    /// adapters drain calls already on their way and exit only if this still
+    /// holds.
+    pub fn is_idle(&self) -> bool {
+        self.stack.is_empty() && self.queue.is_empty()
+    }
+
     /// The most recent id handed out, for the adapters to persist.
     pub fn last_id(&self) -> u32 {
         self.last_id
@@ -155,7 +162,7 @@ impl Core {
 
     /// Starts the grace period if idle exit is on and nothing is live.
     fn arm_idle(&mut self) -> Option<Effect> {
-        if !self.config.general.idle_exit || !self.stack.is_empty() || !self.queue.is_empty() {
+        if !self.config.general.idle_exit || !self.is_idle() {
             return None;
         }
         self.idle_armed = true;

@@ -19,6 +19,7 @@ use calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationTok
 use crate::config::Config;
 use crate::core::{Core, Effect, Event};
 use crate::dbus::{self, DbusAdapter};
+use crate::ids::IdStore;
 use crate::wayland::Wayland;
 use crate::{debug, error};
 
@@ -37,6 +38,10 @@ struct App {
     wayland: Option<Wayland>,
     handle: LoopHandle<'static, App>,
     timers: HashMap<u32, RegistrationToken>,
+    idle_timer: Option<RegistrationToken>,
+    ids: IdStore,
+    /// The last id written to `ids`.
+    saved_id: u32,
     exit: bool,
 }
 
@@ -93,14 +98,21 @@ pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
         Some(wayland)
     };
 
+    let ids = IdStore::open();
+    let saved_id = ids.load();
     let mut app = App {
-        core: Core::with_config(config),
+        core: Core::with_config(config).resuming_after(saved_id),
         dbus,
         wayland,
         handle,
         timers: HashMap::new(),
+        idle_timer: None,
+        ids,
+        saved_id,
         exit: false,
     };
+    let effects = app.core.handle(Event::Started);
+    app.apply(effects);
     // `acquire_name` blocked on the bus and may already have queued requests.
     app.serve_dbus();
 
@@ -113,13 +125,49 @@ pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
 
 impl App {
     fn serve_dbus(&mut self) {
-        let core = &mut self.core;
-        match self.dbus.process(|event| core.handle(event)) {
+        let Self {
+            core,
+            ids,
+            saved_id,
+            ..
+        } = self;
+        let processed = self.dbus.process(|event| {
+            let effects = core.handle(event);
+            // Saved before the reply leaves, so a Lucent started after this
+            // one, by Idle exit or by a crash, never reuses an id.
+            if core.last_id() != *saved_id {
+                *saved_id = core.last_id();
+                ids.save(*saved_id);
+            }
+            effects
+        });
+        match processed {
             Ok(effects) => self.apply(effects),
             Err(dbus::Disconnected) => {
                 error!("lost the session bus connection");
                 self.exit = true;
             }
+        }
+    }
+
+    /// Releases the bus name and exits, unless a Notification sent before the
+    /// release turns up while draining: that one is shown, not lost.
+    fn idle_exit(&mut self) {
+        if let Err(e) = self.dbus.release_name() {
+            error!("could not release {}: {e}", dbus::NAME);
+        }
+        // From here on the bus starts a new Lucent for new calls; anything
+        // already routed here is answered first.
+        self.serve_dbus();
+        if self.core.is_idle() {
+            debug!("idle; exiting");
+            self.exit = true;
+            return;
+        }
+        match self.dbus.acquire_name() {
+            Ok(Ok(())) => debug!("a late Notification arrived; staying"),
+            // Another Lucent was activated meanwhile; finish what is shown.
+            _ => debug!("a late Notification arrived; serving it without the name"),
         }
     }
 
@@ -159,7 +207,31 @@ impl App {
                     }
                 }
                 Effect::Closed { id, reason } => self.dbus.emit_closed(id, reason),
-                Effect::StartIdleTimer { .. } | Effect::CancelIdleTimer | Effect::Exit => {}
+                Effect::StartIdleTimer { after } => {
+                    let token = self.handle.insert_source(
+                        Timer::from_duration(after),
+                        |_, _, app: &mut App| {
+                            app.idle_timer = None;
+                            let effects = app.core.handle(Event::IdleTimerFired);
+                            app.apply(effects);
+                            TimeoutAction::Drop
+                        },
+                    );
+                    match token {
+                        Ok(token) => {
+                            if let Some(old) = self.idle_timer.replace(token) {
+                                self.handle.remove(old);
+                            }
+                        }
+                        Err(e) => error!("could not start the idle timer: {e}"),
+                    }
+                }
+                Effect::CancelIdleTimer => {
+                    if let Some(token) = self.idle_timer.take() {
+                        self.handle.remove(token);
+                    }
+                }
+                Effect::Exit => self.idle_exit(),
             }
         }
     }
