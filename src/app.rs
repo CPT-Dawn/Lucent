@@ -19,6 +19,7 @@ use calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationTok
 use crate::config::Config;
 use crate::core::{Core, Effect, Event};
 use crate::dbus::{self, DbusAdapter};
+use crate::icon::Icons;
 use crate::wayland::Wayland;
 use crate::{debug, error};
 
@@ -83,7 +84,8 @@ pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
         debug!("{NO_DRAW} is set; drawing is off");
         None
     } else {
-        let (wayland, source) = Wayland::connect(config.layout.clone())?;
+        let icons = Icons::new(config.theme.icon_size, &config.theme.icon_theme);
+        let (wayland, source) = Wayland::connect(config.layout.clone(), icons)?;
         handle.insert_source(source, |(), queue, app: &mut App| {
             match app.wayland.as_mut() {
                 Some(wayland) => queue.dispatch_pending(wayland),

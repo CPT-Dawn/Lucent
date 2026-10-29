@@ -42,7 +42,7 @@ pub struct Pixels {
 
 impl std::fmt::Debug for Pixels {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Pixels({}x{})", self.width, self.height)
+        write!(f, "{}x{}", self.width, self.height)
     }
 }
 

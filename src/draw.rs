@@ -13,6 +13,8 @@ use crate::core::Popup;
 
 const PADDING: f64 = 16.0;
 const LINE_GAP: f64 = 4.0;
+/// Space between the icon and the text beside it.
+const ICON_GAP: f64 = 12.0;
 const RADIUS: f64 = 20.0;
 const BODY_MAX_LINES: i32 = 6;
 const FONT: &str = "Inter, sans-serif";
@@ -28,9 +30,14 @@ const fn rgba(r: u8, g: u8, b: u8, a: f64) -> Rgba {
     (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0, a)
 }
 
+/// Where the text starts: beside the icon if there is one.
+fn text_left(icon: Option<&ImageSurface>) -> f64 {
+    icon.map_or(PADDING, |icon| PADDING + icon.width() as f64 + ICON_GAP)
+}
+
 /// The text blocks of a Popup, top to bottom, with their colours.
-fn layouts(cr: &Context, popup: &Popup, width: u32) -> Vec<(Layout, Rgba)> {
-    let text_width = ((width as f64 - 2.0 * PADDING) * pango::SCALE as f64) as i32;
+fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, Rgba)> {
+    let text_width = ((width as f64 - left - PADDING).max(1.0) * pango::SCALE as f64) as i32;
     let block = |size: &str, max_lines: i32| {
         let layout = pangocairo::functions::create_layout(cr);
         layout.set_font_description(Some(&FontDescription::from_string(&format!(
@@ -80,17 +87,24 @@ fn content_height(blocks: &[(Layout, Rgba)]) -> f64 {
     text + LINE_GAP * blocks.len().saturating_sub(1) as f64
 }
 
-/// The height a Popup needs at `width`, in surface pixels.
-pub fn measure(popup: &Popup, width: u32) -> u32 {
-    let height = ImageSurface::create(Format::ARgb32, 1, 1)
+/// The height a Popup with `icon` needs at `width`, in surface pixels.
+pub fn measure(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> u32 {
+    let text = ImageSurface::create(Format::ARgb32, 1, 1)
         .and_then(|s| Context::new(&s))
-        .map(|cr| content_height(&layouts(&cr, popup, width)))
+        .map(|cr| content_height(&layouts(&cr, popup, text_left(icon), width)))
         .unwrap_or(0.0);
-    (height + 2.0 * PADDING).ceil() as u32
+    let icon = icon.map_or(0.0, |icon| icon.height() as f64);
+    (text.max(icon) + 2.0 * PADDING).ceil() as u32
 }
 
 /// Paints the whole Popup over every pixel of `cr`'s `width`×`height` target.
-pub fn paint(cr: &Context, popup: &Popup, width: u32, height: u32) -> Result<(), cairo::Error> {
+pub fn paint(
+    cr: &Context,
+    popup: &Popup,
+    icon: Option<&ImageSurface>,
+    width: u32,
+    height: u32,
+) -> Result<(), cairo::Error> {
     let (w, h) = (width as f64, height as f64);
 
     // Buffers are reused, so start from fully transparent.
@@ -107,9 +121,15 @@ pub fn paint(cr: &Context, popup: &Popup, width: u32, height: u32) -> Result<(),
     cr.set_line_width(1.0);
     cr.stroke()?;
 
+    if let Some(icon) = icon {
+        cr.set_source_surface(icon, PADDING, PADDING)?;
+        cr.paint()?;
+    }
+
+    let left = text_left(icon);
     let mut y = PADDING;
-    for (layout, colour) in layouts(cr, popup, width) {
-        cr.move_to(PADDING, y);
+    for (layout, colour) in layouts(cr, popup, left, width) {
+        cr.move_to(left, y);
         set_source(cr, colour);
         pangocairo::functions::show_layout(cr, &layout);
         y += layout.pixel_extents().1.height() as f64 + LINE_GAP;

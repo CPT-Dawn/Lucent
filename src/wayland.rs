@@ -25,6 +25,7 @@ use wayland_client::{Connection, QueueHandle};
 
 use crate::config::{self, Layout};
 use crate::core::Popup;
+use crate::icon::Icons;
 use crate::{debug, draw, error, warn};
 
 /// The layer namespace compositor rules can target.
@@ -39,6 +40,7 @@ pub struct Wayland {
     pool: SlotPool,
     qh: QueueHandle<Wayland>,
     layout: Layout,
+    icons: Icons,
     /// Set once a missing `[layout] monitor` has been reported, so the log
     /// says it once rather than per Popup.
     warned_monitor: bool,
@@ -48,6 +50,8 @@ pub struct Wayland {
 
 struct Surface {
     popup: Popup,
+    /// The Popup's image, loaded once at the icon size; dropped with it.
+    icon: Option<cairo::ImageSurface>,
     layer: LayerSurface,
     width: u32,
     height: u32,
@@ -61,7 +65,10 @@ impl Wayland {
     /// Connects to the compositor named by `WAYLAND_DISPLAY`. The returned
     /// source must be inserted into the event loop, dispatching into this
     /// `Wayland`.
-    pub fn connect(layout: Layout) -> Result<(Self, WaylandSource<Wayland>), Box<dyn Error>> {
+    pub fn connect(
+        layout: Layout,
+        icons: Icons,
+    ) -> Result<(Self, WaylandSource<Wayland>), Box<dyn Error>> {
         let conn = Connection::connect_to_env()?;
         let (globals, mut queue) = registry_queue_init::<Wayland>(&conn)?;
         let qh = queue.handle();
@@ -79,6 +86,7 @@ impl Wayland {
             pool,
             qh,
             layout,
+            icons,
             warned_monitor: false,
             surfaces: Vec::new(),
         };
@@ -153,8 +161,11 @@ impl Wayland {
         let mut commit = false;
         let mut redraw = false;
         if surface.popup != *popup {
+            if surface.popup.image != popup.image {
+                surface.icon = popup.image.as_ref().and_then(|i| self.icons.load(i));
+            }
             surface.popup = popup.clone();
-            let height = draw::measure(popup, surface.width);
+            let height = draw::measure(popup, surface.icon.as_ref(), surface.width);
             if height != surface.height {
                 // The configure answering this commit redraws at the new size.
                 surface.height = height;
@@ -181,7 +192,8 @@ impl Wayland {
 
     fn open(&mut self, popup: Popup, offset: i32) -> Surface {
         let width = self.layout.width;
-        let height = draw::measure(&popup, width);
+        let icon = popup.image.as_ref().and_then(|i| self.icons.load(i));
+        let height = draw::measure(&popup, icon.as_ref(), width);
         let output = self.output();
         let surface = self.compositor.create_surface(&self.qh);
         let layer = self.layer_shell.create_layer_surface(
@@ -200,6 +212,7 @@ impl Wayland {
         debug!("opened popup {} ({width}x{height})", popup.id);
         Surface {
             popup,
+            icon,
             layer,
             width,
             height,
@@ -228,7 +241,13 @@ impl Wayland {
                 stride,
             )?;
             let cr = cairo::Context::new(&target)?;
-            let painted = draw::paint(&cr, &surface.popup, surface.width, surface.height);
+            let painted = draw::paint(
+                &cr,
+                &surface.popup,
+                surface.icon.as_ref(),
+                surface.width,
+                surface.height,
+            );
             drop(cr);
             target.finish();
             painted?;

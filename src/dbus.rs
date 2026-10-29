@@ -24,7 +24,7 @@ pub const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 
 /// Capabilities are added only in the change that implements them.
-const CAPABILITIES: [&str; 2] = ["body", "body-markup"];
+const CAPABILITIES: [&str; 3] = ["body", "body-markup", "icon-static"];
 
 /// The session bus went away; nothing more can be served.
 #[derive(Debug)]

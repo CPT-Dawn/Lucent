@@ -154,7 +154,7 @@ fn reports_server_information_and_capabilities_and_accepts_notify() {
     let (caps,): (Vec<String>,) = notifications(&client)
         .method_call(NAME, "GetCapabilities", ())
         .unwrap();
-    assert_eq!(caps, ["body", "body-markup"]);
+    assert_eq!(caps, ["body", "body-markup", "icon-static"]);
 
     let first = notify(&client, "Hello", "World");
     let second = notify(&client, "Hello", "again");
