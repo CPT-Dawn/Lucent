@@ -225,9 +225,11 @@ impl Wayland {
         // One more roundtrip so output names, and whether the compositor
         // can blur, are known before the first Popup.
         queue.roundtrip(&mut wayland)?;
-        // A fractional hint is only usable through a viewport.
+        // A fractional hint is only usable through a viewport. Clamp first,
+        // so a stale 0 can't pass as a whole scale.
+        let scale_hint = scale_hint.clamp(UNSCALED / 2, 10 * UNSCALED);
         if wayland.fractional.is_some() || scale_hint.is_multiple_of(UNSCALED) {
-            wayland.scale_hint = scale_hint.clamp(UNSCALED / 2, 10 * UNSCALED);
+            wayland.scale_hint = scale_hint;
         }
         Ok((wayland, WaylandSource::new(conn, queue)))
     }
