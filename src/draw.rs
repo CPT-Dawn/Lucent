@@ -21,6 +21,14 @@ fn text_left(popup: &Popup, icon: Option<&ImageSurface>) -> f64 {
     let padding = f64::from(popup.theme.padding);
     icon.map_or(padding, |icon| padding + icon.width() as f64 + ICON_GAP)
 }
+/// Action buttons: at most this many share a row; more wrap below.
+const BUTTONS_PER_ROW: usize = 3;
+const BUTTON_HEIGHT: f64 = 28.0;
+const BUTTON_GAP: f64 = 8.0;
+const BUTTON_RADIUS: f64 = 10.0;
+const BUTTON_PADDING: f64 = 8.0;
+/// How strongly a resting button is filled, in percent of the summary colour.
+const BUTTON_WASH: u8 = 10;
 
 /// The text blocks of a Popup, top to bottom, with their colours.
 fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, Rgba)> {
@@ -103,25 +111,95 @@ fn bar_room(popup: &Popup) -> f64 {
     }
 }
 
-/// The height a Popup with `icon` needs at `width`, in surface pixels.
-pub fn measure(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> u32 {
-    let text = ImageSurface::create(Format::ARgb32, 1, 1)
-        .and_then(|s| Context::new(&s))
-        .map(|cr| {
-            content_height(&layouts(&cr, popup, text_left(popup, icon), width)) + bar_room(popup)
-        })
-        .unwrap_or(0.0);
-    let icon = icon.map_or(0.0, |icon| icon.height() as f64);
-    (text.max(icon) + 2.0 * f64::from(popup.theme.padding)).ceil() as u32
+/// A rectangle in surface pixels, from the Popup's top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
-/// Paints the whole Popup over every pixel of `cr`'s `width`×`height` target.
+impl Rect {
+    /// Whether (`x`, `y`) lies inside, counting the top and left edges.
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        (self.x..self.x + self.width).contains(&x) && (self.y..self.y + self.height).contains(&y)
+    }
+}
+
+/// The height of the Popup's body: its text and progress bar, or its icon
+/// beside them if that is taller.
+fn body_height(text: &[(Layout, Rgba)], popup: &Popup, icon: Option<&ImageSurface>) -> f64 {
+    let text = content_height(text) + bar_room(popup);
+    text.max(icon.map_or(0.0, |icon| icon.height() as f64))
+}
+
+/// The height of the Popup's body at `width`, laid out on a scratch surface.
+fn measure_body(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> f64 {
+    ImageSurface::create(Format::ARgb32, 1, 1)
+        .and_then(|s| Context::new(&s))
+        .map(|cr| {
+            let blocks = layouts(&cr, popup, text_left(popup, icon), width);
+            body_height(&blocks, popup, icon)
+        })
+        .unwrap_or(0.0)
+}
+
+/// Lays out `count` buttons below a body `body_height` tall, inset by
+/// `padding`: rows of up to [`BUTTONS_PER_ROW`], each row's buttons sharing
+/// the full inner width equally, under the icon as well as the text.
+fn button_rects(count: usize, body_height: f64, width: u32, padding: f64) -> Vec<Rect> {
+    let inner = (width as f64 - 2.0 * padding).max(0.0);
+    let top = padding + body_height + BUTTON_GAP;
+    (0..count)
+        .map(|i| {
+            let row = i / BUTTONS_PER_ROW;
+            let in_row = (count - row * BUTTONS_PER_ROW).min(BUTTONS_PER_ROW) as f64;
+            let column = (i % BUTTONS_PER_ROW) as f64;
+            let w = ((inner - BUTTON_GAP * (in_row - 1.0)) / in_row).max(0.0);
+            Rect {
+                x: padding + column * (w + BUTTON_GAP),
+                y: top + row as f64 * (BUTTON_HEIGHT + BUTTON_GAP),
+                width: w,
+                height: BUTTON_HEIGHT,
+            }
+        })
+        .collect()
+}
+
+/// Where each of the Popup's Action buttons sits at `width`, in order.
+pub fn buttons(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> Vec<Rect> {
+    if popup.actions.is_empty() {
+        return Vec::new();
+    }
+    let padding = f64::from(popup.theme.padding);
+    button_rects(
+        popup.actions.len(),
+        measure_body(popup, icon, width),
+        width,
+        padding,
+    )
+}
+
+/// The height a Popup with `icon` needs at `width`, in surface pixels.
+pub fn measure(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> u32 {
+    let padding = f64::from(popup.theme.padding);
+    let body = measure_body(popup, icon, width);
+    let bottom = button_rects(popup.actions.len(), body, width, padding)
+        .last()
+        .map_or(padding + body, |b| b.y + b.height);
+    (bottom + padding).ceil() as u32
+}
+
+/// Paints the whole Popup over every pixel of `cr`'s `width`×`height` target,
+/// with the Action button at index `hovered` in the accent colour.
 pub fn paint(
     cr: &Context,
     popup: &Popup,
     icon: Option<&ImageSurface>,
     width: u32,
     height: u32,
+    hovered: Option<usize>,
 ) -> Result<(), cairo::Error> {
     let (w, h) = (width as f64, height as f64);
     let theme = &popup.theme;
@@ -185,6 +263,49 @@ pub fn paint(
     }
     if bar_at == blocks.len() {
         progress_bar(cr, popup, left, y, w)?;
+    }
+
+    let body = body_height(&blocks, popup, icon);
+    let rects = button_rects(popup.actions.len(), body, width, padding);
+    let button_radius = BUTTON_RADIUS.min(f64::from(theme.radius));
+    for (index, (action, rect)) in popup.actions.iter().zip(&rects).enumerate() {
+        // Resting buttons are a faint wash of the summary colour, so they
+        // suit light and dark Themes alike; the hovered one takes the
+        // accent, its label the background made opaque.
+        let (fill, text) = if hovered == Some(index) {
+            (
+                theme.accent,
+                Rgba {
+                    a: 255,
+                    ..theme.background
+                },
+            )
+        } else {
+            (theme.summary.faded(BUTTON_WASH), theme.summary)
+        };
+        rounded_rect(cr, rect.x, rect.y, rect.width, rect.height, button_radius);
+        set_source(cr, fill);
+        cr.fill()?;
+
+        // One line, centred, cut with an ellipsis when it does not fit.
+        let label = pangocairo::functions::create_layout(cr);
+        label.set_font_description(Some(&FontDescription::from_string(&format!(
+            "{} Medium {}",
+            theme.font, theme.app_name_size
+        ))));
+        let label_width = (rect.width - 2.0 * BUTTON_PADDING).max(0.0);
+        label.set_width((label_width * pango::SCALE as f64) as i32);
+        label.set_ellipsize(EllipsizeMode::End);
+        label.set_single_paragraph_mode(true);
+        label.set_alignment(pango::Alignment::Center);
+        label.set_text(&action.label);
+        let label_height = label.pixel_extents().1.height() as f64;
+        cr.move_to(
+            rect.x + BUTTON_PADDING,
+            rect.y + (rect.height - label_height) / 2.0,
+        );
+        set_source(cr, text);
+        pangocairo::functions::show_layout(cr, &label);
     }
     Ok(())
 }

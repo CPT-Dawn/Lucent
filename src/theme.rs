@@ -40,7 +40,7 @@ impl Rgba {
     }
 
     /// The same colour with its alpha scaled by `percent`.
-    fn faded(self, percent: u8) -> Self {
+    pub fn faded(self, percent: u8) -> Self {
         let a = (u16::from(self.a) * u16::from(percent.min(100)) + 50) / 100;
         Self { a: a as u8, ..self }
     }
