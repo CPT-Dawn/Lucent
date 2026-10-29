@@ -36,6 +36,12 @@ pub struct General {
     pub timeout: Duration,
     /// The most Popups in the Stack; the rest wait in the Queue.
     pub max_visible: usize,
+    /// Exit once the Stack and Queue stay empty for `idle_grace` (ADR-0002).
+    pub idle_exit: bool,
+    /// How long an empty Lucent waits before exiting, in milliseconds in the
+    /// file.
+    #[serde(deserialize_with = "millis")]
+    pub idle_grace: Duration,
 }
 
 impl Default for General {
@@ -43,6 +49,8 @@ impl Default for General {
         Self {
             timeout: Duration::from_secs(5),
             max_visible: 5,
+            idle_exit: true,
+            idle_grace: Duration::from_secs(5),
         }
     }
 }

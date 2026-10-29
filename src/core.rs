@@ -50,6 +50,10 @@ pub enum Event {
     TimerFired(u32),
     /// An application asked for this Notification to close.
     Close(u32),
+    /// Lucent has just started serving, with nothing to show yet.
+    Started,
+    /// The timer started by [`Effect::StartIdleTimer`] has elapsed.
+    IdleTimerFired,
 }
 
 /// Something the adapters must do, in the order given.
@@ -65,6 +69,13 @@ pub enum Effect {
     CancelTimer(u32),
     /// Emit `NotificationClosed` for `id`.
     Closed { id: u32, reason: CloseReason },
+    /// The Stack and Queue are empty: fire [`Event::IdleTimerFired`] once
+    /// `after` has elapsed (Idle exit, ADR-0002).
+    StartIdleTimer { after: Duration },
+    /// Drop the idle timer: there is something to show again.
+    CancelIdleTimer,
+    /// Release the bus name and end the process.
+    Exit,
 }
 
 #[derive(Debug)]
@@ -79,6 +90,8 @@ pub struct Core {
     stack: Vec<Popup>,
     /// Notifications waiting for room, oldest first.
     queue: VecDeque<Popup>,
+    /// Whether the idle grace period is running.
+    idle_armed: bool,
 }
 
 impl Default for Core {
@@ -101,6 +114,7 @@ impl Core {
             last_id: 0,
             stack: Vec::new(),
             queue: VecDeque::new(),
+            idle_armed: false,
         }
     }
 
@@ -111,11 +125,52 @@ impl Core {
         Self::with_config(config)
     }
 
+    /// Continues numbering after `last_id`, the last id an earlier run handed
+    /// out, so ids keep increasing across Idle exits.
+    pub fn resuming_after(mut self, last_id: u32) -> Self {
+        self.last_id = last_id;
+        self
+    }
+
+    /// The most recent id handed out, for the adapters to persist.
+    pub fn last_id(&self) -> u32 {
+        self.last_id
+    }
+
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         match event {
-            Event::Notify(n) => self.notify(n),
+            Event::Notify(n) => {
+                let mut effects = self.notify(n);
+                if std::mem::take(&mut self.idle_armed) {
+                    effects.push(Effect::CancelIdleTimer);
+                }
+                effects
+            }
             Event::TimerFired(id) => self.expire(id),
             Event::Close(id) => self.close(id),
+            Event::Started => self.arm_idle().into_iter().collect(),
+            Event::IdleTimerFired => self.idle_elapsed(),
+        }
+    }
+
+    /// Starts the grace period if idle exit is on and nothing is live.
+    fn arm_idle(&mut self) -> Option<Effect> {
+        if !self.config.general.idle_exit || !self.stack.is_empty() || !self.queue.is_empty() {
+            return None;
+        }
+        self.idle_armed = true;
+        Some(Effect::StartIdleTimer {
+            after: self.config.general.idle_grace,
+        })
+    }
+
+    /// Exits only if the grace period is still running: a Notification may
+    /// have cancelled it after the timer had already fired.
+    fn idle_elapsed(&mut self) -> Vec<Effect> {
+        if std::mem::take(&mut self.idle_armed) {
+            vec![Effect::Exit]
+        } else {
+            vec![]
         }
     }
 
@@ -198,6 +253,7 @@ impl Core {
         effects.push(self.stack_effect());
         effects.extend(started);
         effects.push(Effect::Closed { id, reason });
+        effects.extend(self.arm_idle());
         effects
     }
 

@@ -10,6 +10,8 @@ fn defaults() -> Config {
         general: General {
             timeout: Duration::from_secs(5),
             max_visible: 5,
+            idle_exit: true,
+            idle_grace: Duration::from_secs(5),
         },
         layout: Layout {
             anchor: Anchor::TopRight,
@@ -58,6 +60,8 @@ fn a_full_config_sets_every_field() {
         [general]
         timeout = 2500
         max_visible = 3
+        idle_exit = false
+        idle_grace = 750
 
         [layout]
         anchor = "bottom-center"
@@ -79,6 +83,8 @@ fn a_full_config_sets_every_field() {
             general: General {
                 timeout: Duration::from_millis(2500),
                 max_visible: 3,
+                idle_exit: false,
+                idle_grace: Duration::from_millis(750),
             },
             layout: Layout {
                 anchor: Anchor::BottomCenter,

@@ -159,6 +159,7 @@ impl App {
                     }
                 }
                 Effect::Closed { id, reason } => self.dbus.emit_closed(id, reason),
+                Effect::StartIdleTimer { .. } | Effect::CancelIdleTimer | Effect::Exit => {}
             }
         }
     }
