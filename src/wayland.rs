@@ -7,7 +7,10 @@
 //!
 //! Pointer input on a Popup becomes core [`Event`]s, collected during
 //! dispatch for the app to drain with [`Wayland::take_events`]. Popups never
-//! take keyboard focus.
+//! take keyboard focus. A press first asks the compositor for an
+//! `xdg_activation_v1` token, and its event waits for the answer, so an
+//! Action the press invokes can hand the app a token to raise its window
+//! with ([`Wayland::take_token`]).
 //!
 //! On a scaled monitor each buffer is drawn at the monitor's scale, so text
 //! stays sharp: fractional scales through `wp_fractional_scale_v1` and a
@@ -18,6 +21,7 @@
 //! through `ext_background_effect_v1`, over its rounded shape. Compositors
 //! without it need a layer rule instead (see the README).
 
+use std::collections::HashMap;
 use std::error::Error;
 
 use calloop_wayland_source::WaylandSource;
@@ -34,6 +38,10 @@ use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::
 use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
     wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+};
+use smithay_client_toolkit::reexports::protocols::xdg::activation::v1::client::{
+    xdg_activation_token_v1::{self, XdgActivationTokenV1},
+    xdg_activation_v1::XdgActivationV1,
 };
 use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
@@ -70,6 +78,13 @@ pub struct Wayland {
     outputs: OutputState,
     seats: SeatState,
     pointer: Option<wl_pointer::WlPointer>,
+    /// The seat the pointer belongs to, which activation tokens name.
+    seat: Option<wl_seat::WlSeat>,
+    activation: Option<XdgActivationV1>,
+    /// Presses waiting for their activation token, oldest first.
+    pressing: Vec<(XdgActivationTokenV1, Event)>,
+    /// Tokens for the presses in `events`, by Popup id.
+    tokens: HashMap<u32, String>,
     /// Sets the arrow over Popups, where the compositor offers it; without
     /// it the pointer keeps whatever image it had.
     cursor_shapes: Option<CursorShapeManager>,
@@ -173,6 +188,10 @@ impl Wayland {
             outputs: OutputState::new(&globals, &qh),
             seats: SeatState::new(&globals, &qh),
             pointer: None,
+            seat: None,
+            activation: globals.bind(&qh, 1..=1, Extension).ok(),
+            pressing: Vec::new(),
+            tokens: HashMap::new(),
             cursor_shapes: CursorShapeManager::bind(&globals, &qh).ok(),
             cursor: None,
             fractional,
@@ -219,6 +238,17 @@ impl Wayland {
     /// Pointer input on Popups since the last call, as core events.
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
+    }
+
+    /// The activation token for the press on Popup `id` among the events
+    /// last taken, if the compositor gave one. Taken once.
+    pub fn take_token(&mut self, id: u32) -> Option<String> {
+        self.tokens.remove(&id)
+    }
+
+    /// Drops the tokens no Action used: a press that only dismissed.
+    pub fn forget_tokens(&mut self) {
+        self.tokens.clear();
     }
 
     /// The margin on the edge the Stack grows from.
@@ -667,6 +697,7 @@ impl SeatHandler for Wayland {
                         .as_ref()
                         .map(|shapes| shapes.get_shape_device(&pointer, qh));
                     self.pointer = Some(pointer);
+                    self.seat = Some(seat);
                 }
                 Err(e) => error!("could not use the pointer: {e}"),
             }
@@ -687,6 +718,7 @@ impl SeatHandler for Wayland {
                 cursor.destroy();
             }
             pointer.release();
+            self.seat = None;
         }
     }
 
@@ -727,7 +759,11 @@ impl PointerHandler for Wayland {
                     self.hover_action(index, x, y);
                     continue;
                 }
-                PointerEventKind::Press { button: code, .. } => {
+                PointerEventKind::Press {
+                    button: code,
+                    serial,
+                    ..
+                } => {
                     let Some(button) = Button::from_code(code) else {
                         continue;
                     };
@@ -736,13 +772,22 @@ impl PointerHandler for Wayland {
                     let action = (button == Button::Left)
                         .then(|| surface.action_rects.iter().position(|r| r.contains(x, y)))
                         .flatten();
-                    match action {
+                    let event = match action {
                         Some(at) => Event::InvokeAction {
                             id,
                             key: surface.popup.actions[at].key.clone(),
                         },
                         None => Event::Click { id, button },
+                    };
+                    if let (Some(activation), Some(seat)) = (&self.activation, &self.seat) {
+                        let token = activation.get_activation_token(&self.qh, Extension);
+                        token.set_serial(serial, seat);
+                        token.set_surface(surface.layer.wl_surface());
+                        token.commit();
+                        self.pressing.push((token, event));
+                        continue;
                     }
+                    event
                 }
                 _ => continue,
             };
@@ -829,7 +874,32 @@ macro_rules! no_events {
         }
     )*};
 }
+impl Dispatch2<XdgActivationTokenV1, Wayland> for Extension {
+    fn event(
+        &self,
+        state: &mut Wayland,
+        proxy: &XdgActivationTokenV1,
+        event: xdg_activation_token_v1::Event,
+        _: &Connection,
+        _: &QueueHandle<Wayland>,
+    ) {
+        let xdg_activation_token_v1::Event::Done { token } = event else {
+            return;
+        };
+        proxy.destroy();
+        let Some(at) = state.pressing.iter().position(|(t, _)| t == proxy) else {
+            return;
+        };
+        let (_, press) = state.pressing.remove(at);
+        if let Event::Click { id, .. } | Event::InvokeAction { id, .. } = press {
+            state.tokens.insert(id, token);
+        }
+        state.events.push(press);
+    }
+}
+
 no_events!(
+    XdgActivationV1,
     WpFractionalScaleManagerV1,
     WpViewporter,
     WpViewport,

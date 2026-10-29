@@ -249,6 +249,16 @@ impl DbusAdapter {
         channel.flush();
     }
 
+    /// Queues and sends an `ActivationToken` signal (spec 1.2), which must
+    /// come just before the `ActionInvoked` it belongs to.
+    pub fn emit_activation_token(&self, id: u32, token: &str) {
+        debug!("ActivationToken id={id}");
+        let signal = Message::new_signal(PATH, NAME, "ActivationToken")
+            .expect("static signal names are valid")
+            .append2(id, token);
+        let _ = self.conn.channel().send(signal);
+    }
+
     /// Queues and sends an `ActionInvoked` signal.
     pub fn emit_action_invoked(&self, id: u32, key: &str) {
         debug!("ActionInvoked id={id} key={key:?}");

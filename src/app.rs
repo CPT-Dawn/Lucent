@@ -104,6 +104,9 @@ pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
                 let effects = app.core.handle(event);
                 app.apply(effects);
             }
+            if let Some(wayland) = app.wayland.as_mut() {
+                wayland.forget_tokens();
+            }
             Ok(dispatched)
         })?;
         Some(wayland)
@@ -257,7 +260,14 @@ impl App {
                     }
                 }
                 Effect::Exit => self.idle_exit(),
-                Effect::ActionInvoked { id, key } => self.dbus.emit_action_invoked(id, &key),
+                Effect::ActionInvoked { id, key } => {
+                    // Lets the app raise its window: Wayland allows that
+                    // only with a token from the input that asked for it.
+                    if let Some(token) = self.wayland.as_mut().and_then(|w| w.take_token(id)) {
+                        self.dbus.emit_activation_token(id, &token);
+                    }
+                    self.dbus.emit_action_invoked(id, &key);
+                }
             }
         }
     }
