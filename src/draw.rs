@@ -179,11 +179,14 @@ fn body_height(text: &[(Layout, Rgba)], popup: &Popup, icon: Option<&ImageSurfac
     text.max(icon.map_or(0.0, |icon| icon::extent(icon).1))
 }
 
-/// The height of the Popup's body at `width`, laid out on a scratch surface.
-fn measure_body(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> f64 {
+/// The height of the Popup's body at `width`, laid out on a scratch surface
+/// at `scale`: the fonts Pango loads for it are then the ones painting at
+/// that scale uses, rather than a second set.
+fn measure_body(popup: &Popup, icon: Option<&ImageSurface>, width: u32, scale: f64) -> f64 {
     ImageSurface::create(Format::ARgb32, 1, 1)
         .and_then(|s| Context::new(&s))
         .map(|cr| {
+            cr.scale(scale, scale);
             let blocks = layouts(&cr, popup, text_left(popup, icon), width);
             body_height(&blocks, popup, icon)
         })
@@ -214,13 +217,24 @@ fn layout_actions(count: usize, body_height: f64, width: u32, padding: f64) -> V
 
 /// Where each of the Popup's Actions sits at `width`, in order.
 pub fn action_rects(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> Vec<Rect> {
+    action_rects_at(popup, icon, width, 1.0)
+}
+
+/// [`action_rects`], for a Popup painted at `scale`; the result is still in
+/// surface pixels.
+pub fn action_rects_at(
+    popup: &Popup,
+    icon: Option<&ImageSurface>,
+    width: u32,
+    scale: f64,
+) -> Vec<Rect> {
     if popup.actions.is_empty() {
         return Vec::new();
     }
     let padding = f64::from(popup.theme.padding);
     layout_actions(
         popup.actions.len(),
-        measure_body(popup, icon, width),
+        measure_body(popup, icon, width, scale),
         width,
         padding,
     )
@@ -228,8 +242,14 @@ pub fn action_rects(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> V
 
 /// The height a Popup with `icon` needs at `width`, in surface pixels.
 pub fn measure(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> u32 {
+    measure_at(popup, icon, width, 1.0)
+}
+
+/// [`measure`], for a Popup painted at `scale`; the height is still in
+/// surface pixels.
+pub fn measure_at(popup: &Popup, icon: Option<&ImageSurface>, width: u32, scale: f64) -> u32 {
     let padding = f64::from(popup.theme.padding);
-    let body = measure_body(popup, icon, width);
+    let body = measure_body(popup, icon, width, scale);
     let bottom = layout_actions(popup.actions.len(), body, width, padding)
         .last()
         .map_or(padding + body, |b| b.y + b.height);

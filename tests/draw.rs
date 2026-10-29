@@ -137,3 +137,24 @@ fn buttons_sit_below_an_icon_taller_than_the_text() {
     assert!(buttons[0].y >= 16.0 + 96.0, "{buttons:?}");
     assert!(f64::from(draw::measure(&p, Some(&icon), WIDTH)) >= buttons[0].y + buttons[0].height);
 }
+
+#[test]
+fn a_popup_measures_the_same_at_every_scale() {
+    let mut long = popup(&["Open", "Snooze"]);
+    long.body = "A body long enough to wrap onto a second and maybe a third line, \
+                 to catch any width that rounds differently once scaled."
+        .into();
+    let at_1 = draw::measure(&long, None, WIDTH);
+    for scale in [1.25, 1.5, 5.0 / 3.0, 2.0] {
+        assert_eq!(
+            draw::measure_at(&long, None, WIDTH, scale),
+            at_1,
+            "at {scale}"
+        );
+        assert_eq!(
+            draw::action_rects_at(&long, None, WIDTH, scale),
+            draw::action_rects(&long, None, WIDTH),
+            "at {scale}"
+        );
+    }
+}

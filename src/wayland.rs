@@ -71,7 +71,7 @@ use crate::{debug, draw, error};
 const NAMESPACE: &str = "lucent";
 
 /// Scales are kept in 120ths, as `wp_fractional_scale_v1` sends them.
-const UNSCALED: u32 = 120;
+pub const UNSCALED: u32 = 120;
 
 pub struct Wayland {
     registry: RegistryState,
@@ -91,6 +91,10 @@ pub struct Wayland {
     cursor: Option<WpCursorShapeDeviceV1>,
     /// Both present, or neither: fractional scaling needs the two together.
     fractional: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
+    /// The scale (in 120ths) the compositor last asked a Popup for: new
+    /// Popups are measured and drawn at it, so the usual case needs no
+    /// second pass once the compositor confirms it.
+    scale_hint: u32,
     /// Requests blur behind translucent Popups. Kept only once the
     /// compositor says it can blur.
     blur: Option<ExtBackgroundEffectManagerV1>,
@@ -162,6 +166,11 @@ fn scaled(logical: u32, scale: u32) -> u32 {
     u32::try_from(pixels).unwrap_or(u32::MAX)
 }
 
+/// A scale in 120ths, as a factor.
+fn to_f64(scale: u32) -> f64 {
+    f64::from(scale) / f64::from(UNSCALED)
+}
+
 /// User data for the protocol objects Lucent binds itself, rather than
 /// through a toolkit helper.
 struct Extension;
@@ -170,7 +179,13 @@ impl Wayland {
     /// Connects to the compositor named by `WAYLAND_DISPLAY`. The returned
     /// source must be inserted into the event loop, dispatching into this
     /// `Wayland`.
-    pub fn connect(layout: Layout) -> Result<(Self, WaylandSource<Wayland>), Box<dyn Error>> {
+    ///
+    /// `scale_hint` is the scale, in 120ths, a Popup was last drawn at
+    /// (see [`Self::scale_hint`]), or [`UNSCALED`] if unknown.
+    pub fn connect(
+        layout: Layout,
+        scale_hint: u32,
+    ) -> Result<(Self, WaylandSource<Wayland>), Box<dyn Error>> {
         let conn = Connection::connect_to_env()?;
         let (globals, mut queue) = registry_queue_init::<Wayland>(&conn)?;
         let qh = queue.handle();
@@ -194,6 +209,7 @@ impl Wayland {
             tokens: HashMap::new(),
             cursor_shapes: CursorShapeManager::bind(&globals, &qh).ok(),
             cursor: None,
+            scale_hint: UNSCALED,
             fractional,
             blur: globals.bind(&qh, 1..=1, Extension).ok(),
             events: Vec::new(),
@@ -209,6 +225,10 @@ impl Wayland {
         // One more roundtrip so output names, and whether the compositor
         // can blur, are known before the first Popup.
         queue.roundtrip(&mut wayland)?;
+        // A fractional hint is only usable through a viewport.
+        if wayland.fractional.is_some() || scale_hint.is_multiple_of(UNSCALED) {
+            wayland.scale_hint = scale_hint.clamp(UNSCALED / 2, 10 * UNSCALED);
+        }
         Ok((wayland, WaylandSource::new(conn, queue)))
     }
 
@@ -233,6 +253,12 @@ impl Wayland {
             }
             offset += px(self.surfaces[index].height + self.layout.gap);
         }
+    }
+
+    /// The scale, in 120ths, the compositor last asked a Popup to be drawn
+    /// at, for the next Lucent to start from.
+    pub fn scale_hint(&self) -> u32 {
+        self.scale_hint
     }
 
     /// Pointer input on Popups since the last call, as core events.
@@ -307,8 +333,9 @@ impl Wayland {
             surface.popup = popup.clone();
             // The Actions may have moved; the next motion finds the right one.
             surface.hovered = None;
-            surface.action_rects = draw::action_rects(popup, surface.icon.as_ref(), surface.width);
-            let height = draw::measure(popup, surface.icon.as_ref(), surface.width);
+            let (icon, scale) = (surface.icon.as_ref(), to_f64(surface.scale));
+            surface.action_rects = draw::action_rects_at(popup, icon, surface.width, scale);
+            let height = draw::measure_at(popup, icon, surface.width, scale);
             if height != surface.height {
                 // The configure answering this commit redraws at the new size.
                 surface.height = height;
@@ -335,8 +362,9 @@ impl Wayland {
 
     fn open(&mut self, popup: Popup, offset: i32) -> Surface {
         let width = self.layout.width;
-        let icon = load_icon(&popup, UNSCALED);
-        let height = draw::measure(&popup, icon.as_ref(), width);
+        let scale = self.scale_hint;
+        let icon = load_icon(&popup, scale);
+        let height = draw::measure_at(&popup, icon.as_ref(), width, to_f64(scale));
         let output = self.output();
         let surface = self.compositor.create_surface(&self.qh);
         let (viewport, fractional) = match &self.fractional {
@@ -365,11 +393,11 @@ impl Wayland {
         layer.commit();
         debug!("opened popup {} ({width}x{height})", popup.id);
         Surface {
-            action_rects: draw::action_rects(&popup, icon.as_ref(), width),
+            action_rects: draw::action_rects_at(&popup, icon.as_ref(), width, to_f64(scale)),
             popup,
             icon,
             layer,
-            scale: UNSCALED,
+            scale,
             viewport,
             fractional,
             effect,
@@ -497,7 +525,7 @@ pub fn rounded_region(w: u32, h: u32, radius: u32) -> Vec<(i32, i32, i32, i32)> 
 fn load_icon(popup: &Popup, scale: u32) -> Option<cairo::ImageSurface> {
     let image = popup.image.as_ref()?;
     Icons::new(popup.theme.icon_size, &popup.theme.icon_theme)
-        .with_scale(f64::from(scale) / f64::from(UNSCALED))
+        .with_scale(to_f64(scale))
         .load(image)
 }
 
@@ -576,8 +604,12 @@ impl LayerShellHandler for Wayland {
         // Zero means "pick your own size": keep ours.
         if configure.new_size.0 != 0 && configure.new_size.0 != surface.width {
             surface.width = configure.new_size.0;
-            surface.action_rects =
-                draw::action_rects(&surface.popup, surface.icon.as_ref(), surface.width);
+            surface.action_rects = draw::action_rects_at(
+                &surface.popup,
+                surface.icon.as_ref(),
+                surface.width,
+                to_f64(surface.scale),
+            );
         }
         if configure.new_size.1 != 0 {
             surface.height = configure.new_size.1;
@@ -600,8 +632,12 @@ impl Wayland {
         else {
             return;
         };
+        if scale == 0 {
+            return;
+        }
+        self.scale_hint = scale;
         let target = &mut self.surfaces[index];
-        if scale == 0 || target.scale == scale {
+        if target.scale == scale {
             return;
         }
         debug!("popup {} now drawn at scale {scale}/120", target.popup.id);
