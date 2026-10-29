@@ -106,6 +106,7 @@ class Result:
     popups_pss: int | None
     cold_ms: list = field(default_factory=list)
     warm_ms: list = field(default_factory=list)
+    error: str | None = None  # set when the daemon could not be measured
 
 
 def _size(n):
@@ -120,19 +121,34 @@ def _latency(samples):
     return f"{statistics.median(samples):.1f} ms" if samples else "n/a"
 
 
+_SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
 def markdown_table(rows):
     out = [
         "| Daemon | Version | Binary size | Idle RSS | Idle wakeups "
         "| Peak RSS, 5 Popups | PSS, 5 Popups | Cold start | Warm |",
         "|---|---|--:|--:|--:|--:|--:|--:|--:|",
     ]
+    notes = []
     for r in rows:
+        head = f"| {r.daemon} | {r.version} | {_size(r.binary_bytes)} "
+        if r.error:
+            notes.append(f"{r.daemon}: {r.error}")
+            mark = "failed" + str(len(notes)).translate(_SUPERSCRIPT)
+            out.append(head + "| " + " | ".join([mark] * 6) + " |")
+            continue
         idle = "0 (not running)" if r.idle_rss is None else _size(r.idle_rss)
         out.append(
-            f"| {r.daemon} | {r.version} | {_size(r.binary_bytes)} | {idle} "
+            head + f"| {idle} "
             f"| {r.idle_wakeups} | {_size(r.peak_rss)} | {_size(r.popups_pss)} "
             f"| {_latency(r.cold_ms)} | {_latency(r.warm_ms)} |"
         )
+    if notes:
+        out.append("")
+        out += [
+            str(i).translate(_SUPERSCRIPT) + " " + n for i, n in enumerate(notes, 1)
+        ]
     return "\n".join(out) + "\n"
 
 
@@ -220,6 +236,10 @@ BUS_CONF = """\
 """
 
 
+class DaemonFailed(Exception):
+    """The daemon under test did not answer; carries the end of its log."""
+
+
 class Bus:
     """A throwaway dbus-daemon on which `daemon` is D-Bus activatable as
     org.freedesktop.Notifications, with its own config and runtime dirs."""
@@ -228,8 +248,10 @@ class Bus:
         self.root = Path(tempfile.mkdtemp(dir=root, prefix="bus-"))
         self.log = self.root / "daemon.log"
         self.pids = self.root / "pids"
-        # Socket paths are capped at 108 bytes, so the socket lives in a short
-        # directory under the real runtime dir rather than next to the logs.
+        # Socket paths are capped at 108 bytes, so the bus socket and the
+        # daemon's private XDG_RUNTIME_DIR (where daemons bind their own
+        # sockets) live in a short directory under the real runtime dir rather
+        # than next to the logs.
         self.sock_dir = Path(
             tempfile.mkdtemp(dir=os.environ["XDG_RUNTIME_DIR"], prefix="lucent-bench-")
         )
@@ -237,7 +259,7 @@ class Bus:
         services = self.root / "services"
         services.mkdir()
         config_home = self.root / "config"
-        runtime = self.root / "runtime"
+        runtime = self.sock_dir / "runtime"
         runtime.mkdir(mode=0o700)
         for rel, text in daemon.config.items():
             (config_home / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -252,7 +274,7 @@ class Bus:
             "LANG": os.environ.get("LANG", "C.UTF-8"),
             "XDG_CONFIG_HOME": str(config_home),
             "XDG_RUNTIME_DIR": str(runtime),
-            "WAYLAND_DISPLAY": os.path.join(real_runtime, display),
+            **wayland_env(real_runtime, display, runtime),
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path={socket}",
         }
         if wayland_debug:
@@ -283,9 +305,16 @@ class Bus:
             time.sleep(0.01)
 
     def run(self, *argv):
-        return subprocess.run(
-            argv, env=self.env, check=True, capture_output=True, timeout=20
-        )
+        try:
+            return subprocess.run(
+                argv, env=self.env, check=True, capture_output=True, timeout=20
+            )
+        except subprocess.CalledProcessError as e:
+            why = f"{argv[0]} exited {e.returncode}"
+        except subprocess.TimeoutExpired:
+            why = f"{argv[0]} timed out"
+        tail = self.read_log().strip().splitlines()[-1:]
+        raise DaemonFailed(f"{why}; daemon log: {tail[0] if tail else '(empty)'}")
 
     def notify(self, summary, timeout_ms=5000):
         self.run("notify-send", "-t", str(timeout_ms), summary, "Lucent benchmark body")
@@ -333,6 +362,20 @@ class Bus:
             except ProcessLookupError:
                 pass
         shutil.rmtree(self.sock_dir, ignore_errors=True)
+
+
+def wayland_env(real_runtime, display, private_runtime):
+    """Make the compositor reachable from a private XDG_RUNTIME_DIR.
+
+    The compositor's socket is symlinked into `private_runtime` and
+    WAYLAND_DISPLAY is returned as a bare name, as a real session sets it.
+    Some daemons derive paths from it (fnott binds
+    `$XDG_RUNTIME_DIR/fnott-$WAYLAND_DISPLAY.sock`), so an absolute value
+    breaks them."""
+    target = Path(real_runtime, display)  # an absolute display wins the join
+    name = target.name
+    Path(private_runtime, name).symlink_to(target)
+    return {"WAYLAND_DISPLAY": name}
 
 
 def _sh_quote(s):
@@ -461,6 +504,39 @@ def measure_peak(daemon, root):
         bus.close()
 
 
+def measure_daemon(daemon, root, runs, settle, idle_seconds):
+    """Every measurement of one daemon, or a Result carrying `error` if the
+    daemon could not be started or stopped answering."""
+    result = Result(
+        daemon=daemon.name,
+        version=version(daemon.binary),  # before measuring: names this binary
+        binary_bytes=Path(daemon.binary).stat().st_size,
+        idle_rss=None,
+        idle_wakeups=0,
+        peak_rss=None,
+        popups_pss=None,
+    )
+    stage = "cold start"
+    try:
+        log("  cold start")
+        result.cold_ms = measure_cold(daemon, root, runs)
+        stage = "warm"
+        log("  warm")
+        result.warm_ms = measure_warm(daemon, root, runs)
+        stage = "peak memory"
+        log("  peak memory")
+        result.peak_rss, result.popups_pss = measure_peak(daemon, root)
+        stage = "idle"
+        log(f"  idle ({settle:.0f} s settle + {idle_seconds:.0f} s window)")
+        result.idle_rss, result.idle_wakeups = measure_idle(
+            daemon, root, settle, idle_seconds
+        )
+    except (DaemonFailed, RuntimeError) as e:
+        result.error = f"{stage}: {e}"
+        log(f"  failed: {result.error}")
+    return result
+
+
 def machine():
     cpu = "unknown CPU"
     try:
@@ -512,30 +588,9 @@ def main():
     results = []
     for d in chosen:
         log(f"{d.name}: {d.binary}")
-        ver = version(d.binary)  # before measuring, while it names this binary
         droot = root / re.sub(r"\W+", "-", d.name).strip("-")
         droot.mkdir(exist_ok=True)
-        log("  cold start")
-        cold = measure_cold(d, droot, a.runs)
-        log("  warm")
-        warm = measure_warm(d, droot, a.runs)
-        log("  peak memory")
-        peak, pss = measure_peak(d, droot)
-        log(f"  idle ({a.settle:.0f} s settle + {a.idle_seconds:.0f} s window)")
-        idle_rss, wakeups = measure_idle(d, droot, a.settle, a.idle_seconds)
-        results.append(
-            Result(
-                daemon=d.name,
-                version=ver,
-                binary_bytes=Path(d.binary).stat().st_size,
-                idle_rss=idle_rss,
-                idle_wakeups=wakeups,
-                peak_rss=peak,
-                popups_pss=pss,
-                cold_ms=cold,
-                warm_ms=warm,
-            )
-        )
+        results.append(measure_daemon(d, droot, a.runs, a.settle, a.idle_seconds))
 
     stamp = time.strftime("%Y-%m-%d")
     report = (

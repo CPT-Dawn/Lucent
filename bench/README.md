@@ -38,10 +38,16 @@ script kills the bus and every daemon process it activated.
 
 Every daemon gets the same environment: an empty `XDG_CONFIG_HOME` (so each
 runs its packaged defaults; dunst and swaync then read their `/etc/xdg`
-files), a private `XDG_RUNTIME_DIR`, and the real compositor through an
-absolute `WAYLAND_DISPLAY`. Lucent runs twice: `lucent` with its default Idle
+files), a private `XDG_RUNTIME_DIR`, and the real compositor through a
+symlink to its socket in that private directory, so `WAYLAND_DISPLAY` stays a
+bare name such as `wayland-1`, as on a real desktop (fnott, for one, builds
+its control socket path from it). Lucent runs twice: `lucent` with its default Idle
 exit (ADR-0002), and `lucent (resident)` with `idle_exit = false`, which is
 the fair row to compare against daemons that stay running.
+
+A daemon that cannot be started, or stops answering, does not end the run:
+its row reads `failed` with a footnote naming the measurement and the last
+line of its `daemon.log`, and the remaining daemons are still measured.
 
 ## What is measured
 

@@ -1,8 +1,12 @@
 """Tests for the pure parts of benchmark.py: `python3 -m unittest bench/test_benchmark.py`."""
 
 import os
+import shutil
+import socket
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -125,6 +129,84 @@ class Table(unittest.TestCase):
             "| mako | 1.9.0-1 | 176 KiB | 5.0 MiB | 3 | 9.0 MiB | n/a | n/a "
             "| 1.2 ms |\n",
         )
+
+
+class FailedRow(unittest.TestCase):
+    def test_a_daemon_that_failed_gets_a_row_and_a_footnote(self):
+        row = bench.Result(
+            daemon="fnott",
+            version="1.7.1-1",
+            binary_bytes=204_800,
+            idle_rss=None,
+            idle_wakeups=0,
+            peak_rss=None,
+            popups_pss=None,
+            error="cold start: notify-send exited 1",
+        )
+        self.assertEqual(
+            bench.markdown_table([row]).splitlines()[2:],
+            [
+                "| fnott | 1.7.1-1 | 200 KiB | failed¹ | failed¹ | failed¹ "
+                "| failed¹ | failed¹ | failed¹ |",
+                "",
+                "¹ fnott: cold start: notify-send exited 1",
+            ],
+        )
+
+
+@unittest.skipUnless(
+    os.environ.get("XDG_RUNTIME_DIR")
+    and all(shutil.which(t) for t in ("dbus-daemon", "notify-send", "gdbus")),
+    "needs a session runtime dir, dbus-daemon, notify-send and gdbus",
+)
+class DaemonThatCannotStart(unittest.TestCase):
+    """Runs a real private bus; the "daemon" exits at once, as fnott did."""
+
+    def test_is_reported_as_a_failed_row_instead_of_ending_the_run(self):
+        script = Path(self.enterContext(tempfile.TemporaryDirectory())) / "broken"
+        script.write_text("#!/bin/sh\necho 'err: cannot bind' >&2\nexit 1\n")
+        script.chmod(0o755)
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+        result = bench.measure_daemon(
+            bench.Daemon("broken", str(script)), root, runs=1, settle=0, idle_seconds=0
+        )
+
+        self.assertEqual(result.daemon, "broken")
+        self.assertIn("cold start", result.error)
+        self.assertIn("err: cannot bind", result.error)
+
+
+class CompositorLink(unittest.TestCase):
+    """fnott names its control socket `$XDG_RUNTIME_DIR/fnott-$WAYLAND_DISPLAY.sock`,
+    so WAYLAND_DISPLAY must be a bare name that resolves in the private runtime."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.real = Path(tmp.name) / "real"
+        self.private = Path(tmp.name) / "private"
+        self.real.mkdir()
+        self.private.mkdir()
+        self.server = socket.socket(socket.AF_UNIX)
+        self.addCleanup(self.server.close)
+        self.server.bind(str(self.real / "wayland-1"))
+        self.server.listen()
+
+    def assert_reaches_compositor(self, env):
+        self.assertNotIn("/", env["WAYLAND_DISPLAY"])
+        client = socket.socket(socket.AF_UNIX)
+        self.addCleanup(client.close)
+        client.connect(str(self.private / env["WAYLAND_DISPLAY"]))
+
+    def test_a_relative_display_is_linked_into_the_private_runtime(self):
+        env = bench.wayland_env(str(self.real), "wayland-1", self.private)
+        self.assertEqual(env, {"WAYLAND_DISPLAY": "wayland-1"})
+        self.assert_reaches_compositor(env)
+
+    def test_an_absolute_display_is_linked_by_its_basename(self):
+        env = bench.wayland_env("/nowhere", str(self.real / "wayland-1"), self.private)
+        self.assert_reaches_compositor(env)
 
 
 if __name__ == "__main__":
