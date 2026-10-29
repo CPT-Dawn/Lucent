@@ -236,6 +236,8 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
             .collect(),
         urgency: urgency(&hints),
         timeout: Timeout::from_millis(timeout),
+        // Progress in percent, an int32 by the spec; any integer will do.
+        value: hints.get("value").and_then(|v| v.0.as_i64()),
     })
 }
 

@@ -11,6 +11,8 @@ use crate::core::Popup;
 use crate::theme::Rgba;
 
 const LINE_GAP: f64 = 4.0;
+/// Thickness of the progress bar, in pixels.
+const BAR_HEIGHT: f64 = 6.0;
 
 /// The text blocks of a Popup, top to bottom, with their colours.
 fn layouts(cr: &Context, popup: &Popup, width: u32) -> Vec<(Layout, Rgba)> {
@@ -84,11 +86,20 @@ fn content_height(blocks: &[(Layout, Rgba)]) -> f64 {
     text + LINE_GAP * blocks.len().saturating_sub(1) as f64
 }
 
+/// The room a Popup's progress bar takes, gap included; none without one.
+fn bar_room(popup: &Popup) -> f64 {
+    if popup.value.is_some() {
+        BAR_HEIGHT + LINE_GAP
+    } else {
+        0.0
+    }
+}
+
 /// The height a Popup needs at `width`, in surface pixels.
 pub fn measure(popup: &Popup, width: u32) -> u32 {
     let height = ImageSurface::create(Format::ARgb32, 1, 1)
         .and_then(|s| Context::new(&s))
-        .map(|cr| content_height(&layouts(&cr, popup, width)))
+        .map(|cr| content_height(&layouts(&cr, popup, width)) + bar_room(popup))
         .unwrap_or(0.0);
     (height + 2.0 * f64::from(popup.theme.padding)).ceil() as u32
 }
@@ -136,14 +147,45 @@ pub fn paint(cr: &Context, popup: &Popup, width: u32, height: u32) -> Result<(),
         cr.fill()?;
     }
 
+    let blocks = layouts(cr, popup, width);
+    // The bar sits under the text, above any "+N more" hint.
+    let bar_at = blocks.len() - usize::from(popup.more > 0);
     let mut y = padding;
-    for (layout, colour) in layouts(cr, popup, width) {
+    for (i, (layout, colour)) in blocks.iter().enumerate() {
+        if i == bar_at {
+            y += progress_bar(cr, popup, y, w)?;
+        }
         cr.move_to(padding, y);
-        set_source(cr, colour);
-        pangocairo::functions::show_layout(cr, &layout);
+        set_source(cr, *colour);
+        pangocairo::functions::show_layout(cr, layout);
         y += layout.pixel_extents().1.height() as f64 + LINE_GAP;
     }
+    if bar_at == blocks.len() {
+        progress_bar(cr, popup, y, w)?;
+    }
     Ok(())
+}
+
+/// Paints the Popup's progress bar, if it has one, as a pill-shaped track
+/// at `y` filled in from the left; returns the room it took.
+fn progress_bar(cr: &Context, popup: &Popup, y: f64, w: f64) -> Result<f64, cairo::Error> {
+    let Some(value) = popup.value else {
+        return Ok(0.0);
+    };
+    let theme = &popup.theme;
+    let padding = f64::from(theme.padding);
+    let width = (w - 2.0 * padding).max(0.0);
+    cr.save()?;
+    rounded_rect(cr, padding, y, width, BAR_HEIGHT, BAR_HEIGHT / 2.0);
+    set_source(cr, theme.progress_track);
+    cr.fill_preserve()?;
+    // Clip to the pill so even a sliver of fill keeps its rounded end.
+    cr.clip();
+    cr.rectangle(padding, y, width * f64::from(value) / 100.0, BAR_HEIGHT);
+    set_source(cr, theme.progress_fill);
+    cr.fill()?;
+    cr.restore()?;
+    Ok(bar_room(popup))
 }
 
 fn set_source(cr: &Context, colour: Rgba) {

@@ -26,6 +26,8 @@ pub struct Notification {
     pub urgency: Urgency,
     /// How long the sender asked for the Popup to stay up.
     pub timeout: Timeout,
+    /// The `value` hint, as sent: progress in percent, unchecked.
+    pub value: Option<i64>,
 }
 
 /// A labelled choice the sender offers; the key is reported back when it is
@@ -105,6 +107,8 @@ pub struct Popup {
     pub body_lines: u32,
     /// How long the Popup stays up once shown; `None` until closed.
     pub expire: Option<Duration>,
+    /// Progress to show as a bar, in percent (0–100); `None` shows none.
+    pub value: Option<u8>,
     /// The Theme to draw this Popup with, resolved for its Urgency.
     pub theme: Theme,
 }
@@ -165,6 +169,11 @@ pub enum Effect {
     Exit,
     /// Emit `ActionInvoked` for `id` with the Action's `key`.
     ActionInvoked { id: u32, key: String },
+}
+
+/// The `value` hint as a percentage, clamped to 0–100.
+fn progress(value: Option<i64>) -> Option<u8> {
+    value.map(|v| v.clamp(0, 100) as u8)
 }
 
 /// Where a visible Popup's timeout stands.
@@ -322,6 +331,7 @@ impl Core {
             more: 0,
             body_lines: self.config.general.body_lines,
             expire,
+            value: progress(n.value),
             theme,
         };
         if self.stack.len() >= self.max_visible {
@@ -360,6 +370,7 @@ impl Core {
             p.summary.clone_from(&n.summary);
             p.body = markup::clean(&n.body);
             p.expire = expire;
+            p.value = progress(n.value);
             p.theme.clone_from(&theme);
         };
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
