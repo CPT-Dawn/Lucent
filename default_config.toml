@@ -94,7 +94,7 @@ left = 16
 # leave blur and animation to your compositor (namespace "lucent").
 
 # Font family list for all text, as Pango understands it.
-# font = "Inter, sans-serif"
+# font = "Inter Variable, Inter, sans-serif"
 
 # Text sizes, in points. The summary is semibold.
 # app_name_size = 9

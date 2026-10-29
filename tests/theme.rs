@@ -45,7 +45,10 @@ fn with_no_config_popups_wear_midnight_bloom() {
     assert_eq!(theme.body, hex(0xA9B1D6, 255));
     assert_eq!(theme.app_name, hex(0x92A8A9, 255));
     assert_eq!(theme.accent, hex(0x8DE3DC, 255));
-    assert_eq!(theme.font, "Inter, sans-serif");
+    // Inter, preferring the 0.9 MB variable font over the 13 MB static
+    // collection: Pango maps the font file once per face per library, and a
+    // collection is mostly resident however little of it is used.
+    assert_eq!(theme.font, "Inter Variable, Inter, sans-serif");
     assert!(
         theme.border_top.a > theme.border.a,
         "the top edge should be brighter: {theme:?}"

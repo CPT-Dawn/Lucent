@@ -198,7 +198,7 @@ impl Theme {
     /// under compositor blur yet stay readable without it.
     pub fn midnight_bloom() -> Self {
         Self {
-            font: "Inter, sans-serif".into(),
+            font: "Inter Variable, Inter, sans-serif".into(),
             app_name_size: 9,
             summary_size: 11,
             body_size: 10,
