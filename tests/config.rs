@@ -11,6 +11,8 @@ fn defaults() -> Config {
         general: General {
             timeout: Duration::from_secs(5),
             max_visible: 5,
+            idle_exit: true,
+            idle_grace: Duration::from_secs(5),
             left_click: ClickAction::InvokeDefaultAction,
             middle_click: ClickAction::Dismiss,
             right_click: ClickAction::DismissAll,
@@ -65,6 +67,8 @@ fn a_full_config_sets_every_field() {
         [general]
         timeout = 2500
         max_visible = 3
+        idle_exit = false
+        idle_grace = 750
         left_click = "dismiss-all"
         middle_click = "none"
         right_click = "invoke-default-action"
@@ -91,6 +95,8 @@ fn a_full_config_sets_every_field() {
             general: General {
                 timeout: Duration::from_millis(2500),
                 max_visible: 3,
+                idle_exit: false,
+                idle_grace: Duration::from_millis(750),
                 left_click: ClickAction::DismissAll,
                 middle_click: ClickAction::None,
                 right_click: ClickAction::InvokeDefaultAction,

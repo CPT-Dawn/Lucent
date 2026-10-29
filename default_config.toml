@@ -21,6 +21,13 @@ timeout = 5000
 # appear as earlier ones close.
 max_visible = 5
 
+# Exit once no Popups are showing or waiting, so an idle Lucent uses no memory
+# and no CPU at all. D-Bus starts it again for the next Notification. Set to
+# false to keep Lucent running.
+idle_exit = true
+
+# How long Lucent waits with nothing to show before it exits, in milliseconds.
+idle_grace = 5000
 # What a click on a Popup does, per mouse button. One of:
 #   "invoke-default-action"  run the app's default action, if it has one,
 #                            then dismiss the Popup

@@ -131,6 +131,10 @@ pub enum Event {
     TimerFired(u32),
     /// An application asked for this Notification to close.
     Close(u32),
+    /// Lucent has just started serving, with nothing to show yet.
+    Started,
+    /// The timer started by [`Effect::StartIdleTimer`] has elapsed.
+    IdleTimerFired,
     /// The user pressed `button` on this Notification's Popup.
     Click {
         id: u32,
@@ -155,6 +159,13 @@ pub enum Effect {
     CancelTimer(u32),
     /// Emit `NotificationClosed` for `id`.
     Closed { id: u32, reason: CloseReason },
+    /// The Stack and Queue are empty: fire [`Event::IdleTimerFired`] once
+    /// `after` has elapsed (Idle exit, ADR-0002).
+    StartIdleTimer { after: Duration },
+    /// Drop the idle timer: there is something to show again.
+    CancelIdleTimer,
+    /// Release the bus name and end the process.
+    Exit,
     /// Emit `ActionInvoked` for `id` with the Action's `key`.
     ActionInvoked { id: u32, key: String },
 }
@@ -189,6 +200,8 @@ pub struct Core {
     stack: Vec<Popup>,
     /// Notifications waiting for room, oldest first.
     queue: VecDeque<Popup>,
+    /// Whether the idle grace period is running.
+    idle_armed: bool,
     /// The Actions of every live Notification that offers any.
     actions: HashMap<u32, Vec<Action>>,
     /// The timeout of every Popup in the Stack.
@@ -216,6 +229,7 @@ impl Core {
             last_id: 0,
             stack: Vec::new(),
             queue: VecDeque::new(),
+            idle_armed: false,
             actions: HashMap::new(),
             timeouts: HashMap::new(),
             clock: Clock(Box::new(Instant::now)),
@@ -235,14 +249,62 @@ impl Core {
         Self::with_config(config)
     }
 
+    /// Continues numbering after `last_id`, the last id an earlier run handed
+    /// out, so ids keep increasing across Idle exits.
+    pub fn resuming_after(mut self, last_id: u32) -> Self {
+        self.last_id = last_id;
+        self
+    }
+
+    /// Whether the Stack and Queue are both empty. After [`Effect::Exit`] the
+    /// adapters drain calls already on their way and exit only if this still
+    /// holds.
+    pub fn is_idle(&self) -> bool {
+        self.stack.is_empty() && self.queue.is_empty()
+    }
+
+    /// The most recent id handed out, for the adapters to persist.
+    pub fn last_id(&self) -> u32 {
+        self.last_id
+    }
+
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
         match event {
-            Event::Notify(n) => self.notify(n),
+            Event::Notify(n) => {
+                let mut effects = self.notify(n);
+                if std::mem::take(&mut self.idle_armed) {
+                    effects.push(Effect::CancelIdleTimer);
+                }
+                effects
+            }
             Event::TimerFired(id) => self.expire(id),
             Event::Close(id) => self.close(id),
+            Event::Started => self.arm_idle().into_iter().collect(),
+            Event::IdleTimerFired => self.idle_elapsed(),
             Event::Click { id, button } => self.click(id, button),
             Event::HoverStart(id) => self.hover_start(id),
             Event::HoverEnd(id) => self.hover_end(id),
+        }
+    }
+
+    /// Starts the grace period if idle exit is on and nothing is live.
+    fn arm_idle(&mut self) -> Option<Effect> {
+        if !self.config.general.idle_exit || !self.is_idle() {
+            return None;
+        }
+        self.idle_armed = true;
+        Some(Effect::StartIdleTimer {
+            after: self.config.general.idle_grace,
+        })
+    }
+
+    /// Exits only if the grace period is still running: a Notification may
+    /// have cancelled it after the timer had already fired.
+    fn idle_elapsed(&mut self) -> Vec<Effect> {
+        if std::mem::take(&mut self.idle_armed) {
+            vec![Effect::Exit]
+        } else {
+            vec![]
         }
     }
 
@@ -413,6 +475,7 @@ impl Core {
             id: p.id,
             reason: CloseReason::Dismissed,
         }));
+        effects.extend(self.arm_idle());
         effects
     }
 
@@ -435,6 +498,7 @@ impl Core {
         effects.push(self.stack_effect());
         effects.extend(started);
         effects.push(Effect::Closed { id, reason });
+        effects.extend(self.arm_idle());
         effects
     }
 
