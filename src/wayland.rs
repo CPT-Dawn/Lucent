@@ -13,11 +13,19 @@
 //! stays sharp: fractional scales through `wp_fractional_scale_v1` and a
 //! `wp_viewport`, whole ones through `wl_surface.set_buffer_scale` where
 //! those are missing. Sizes everywhere else are in surface (logical) pixels.
+//!
+//! A translucent Popup asks the compositor to blur what is behind it,
+//! through `ext_background_effect_v1`, over its rounded shape. Compositors
+//! without it need a layer rule instead (see the README).
 
 use std::error::Error;
 
 use calloop_wayland_source::WaylandSource;
-use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
+use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
+use smithay_client_toolkit::reexports::protocols::ext::background_effect::v1::client::{
+    ext_background_effect_manager_v1::{self, ExtBackgroundEffectManagerV1},
+    ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
+};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
@@ -68,6 +76,9 @@ pub struct Wayland {
     cursor: Option<WpCursorShapeDeviceV1>,
     /// Both present, or neither: fractional scaling needs the two together.
     fractional: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
+    /// Requests blur behind translucent Popups. Kept only once the
+    /// compositor says it can blur.
+    blur: Option<ExtBackgroundEffectManagerV1>,
     /// Pointer input waiting for the app, oldest first.
     events: Vec<Event>,
     compositor: CompositorState,
@@ -96,6 +107,11 @@ struct Surface {
     /// the surface size.
     viewport: Option<WpViewport>,
     fractional: Option<WpFractionalScaleV1>,
+    /// Present when the compositor blurs behind surfaces.
+    effect: Option<ExtBackgroundEffectSurfaceV1>,
+    /// The size and corner radius the blur region was last set for, so it
+    /// is sent again only when one changes; `None` while none is set.
+    blurred: Option<(u32, u32, u32)>,
     width: u32,
     height: u32,
     /// Distance from the anchor edge, including the outer margin.
@@ -118,6 +134,9 @@ impl Drop for Surface {
         if let Some(fractional) = self.fractional.take() {
             fractional.destroy();
         }
+        if let Some(effect) = self.effect.take() {
+            effect.destroy();
+        }
     }
 }
 
@@ -128,8 +147,9 @@ fn scaled(logical: u32, scale: u32) -> u32 {
     u32::try_from(pixels).unwrap_or(u32::MAX)
 }
 
-/// User data for the scaling objects Lucent binds itself.
-struct Scaling;
+/// User data for the protocol objects Lucent binds itself, rather than
+/// through a toolkit helper.
+struct Extension;
 
 impl Wayland {
     /// Connects to the compositor named by `WAYLAND_DISPLAY`. The returned
@@ -145,8 +165,8 @@ impl Wayland {
         let shm = Shm::bind(&globals, &qh)?;
         let pool = SlotPool::new((layout.width.max(1) * 120 * 4) as usize, &shm)?;
         let fractional = globals
-            .bind(&qh, 1..=1, Scaling)
-            .and_then(|manager| Ok((manager, globals.bind(&qh, 1..=1, Scaling)?)))
+            .bind(&qh, 1..=1, Extension)
+            .and_then(|manager| Ok((manager, globals.bind(&qh, 1..=1, Extension)?)))
             .ok();
         let mut wayland = Self {
             registry: RegistryState::new(&globals),
@@ -156,6 +176,7 @@ impl Wayland {
             cursor_shapes: CursorShapeManager::bind(&globals, &qh).ok(),
             cursor: None,
             fractional,
+            blur: globals.bind(&qh, 1..=1, Extension).ok(),
             events: Vec::new(),
             compositor,
             layer_shell,
@@ -166,7 +187,8 @@ impl Wayland {
             reported_monitor: false,
             surfaces: Vec::new(),
         };
-        // One more roundtrip so output names are known before the first Popup.
+        // One more roundtrip so output names, and whether the compositor
+        // can blur, are known before the first Popup.
         queue.roundtrip(&mut wayland)?;
         Ok((wayland, WaylandSource::new(conn, queue)))
     }
@@ -289,11 +311,15 @@ impl Wayland {
         let surface = self.compositor.create_surface(&self.qh);
         let (viewport, fractional) = match &self.fractional {
             Some((manager, viewporter)) => (
-                Some(viewporter.get_viewport(&surface, &self.qh, Scaling)),
-                Some(manager.get_fractional_scale(&surface, &self.qh, Scaling)),
+                Some(viewporter.get_viewport(&surface, &self.qh, Extension)),
+                Some(manager.get_fractional_scale(&surface, &self.qh, Extension)),
             ),
             None => (None, None),
         };
+        let effect = self
+            .blur
+            .as_ref()
+            .map(|blur| blur.get_background_effect(&surface, &self.qh, Extension));
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
             surface,
@@ -316,6 +342,8 @@ impl Wayland {
             scale: UNSCALED,
             viewport,
             fractional,
+            effect,
+            blurred: None,
             width,
             height,
             offset,
@@ -373,11 +401,67 @@ impl Wayland {
             // Only whole scales get here; 0 must never be sent.
             None => wl_surface.set_buffer_scale((surface.scale / UNSCALED).max(1) as i32),
         }
+        self.set_blur(index);
+        let surface = &self.surfaces[index];
+        let wl_surface = surface.layer.wl_surface();
         wl_surface.damage_buffer(0, 0, w, h);
         buffer.attach_to(wl_surface)?;
         surface.layer.commit();
         Ok(())
     }
+}
+
+impl Wayland {
+    /// Blurs behind the Popup at `index`, over its rounded shape, while its
+    /// background lets anything show through. Takes effect on the next
+    /// commit.
+    fn set_blur(&mut self, index: usize) {
+        let surface = &mut self.surfaces[index];
+        let Some(effect) = &surface.effect else {
+            return;
+        };
+        let theme = &surface.popup.theme;
+        let wanted =
+            (theme.background.a < 255).then_some((surface.width, surface.height, theme.radius));
+        if wanted == surface.blurred {
+            return;
+        }
+        surface.blurred = wanted;
+        let Some((w, h, radius)) = wanted else {
+            effect.set_blur_region(None);
+            return;
+        };
+        match Region::new(&self.compositor) {
+            Ok(region) => {
+                for (x, y, width, height) in rounded_region(w, h, radius) {
+                    region.add(x, y, width, height);
+                }
+                // The region is copied; dropping it here is fine.
+                effect.set_blur_region(Some(region.wl_region()));
+            }
+            Err(e) => error!("could not blur behind a popup: {e}"),
+        }
+    }
+}
+
+/// A `w`×`h` rectangle with corners of `radius`, as the rectangles a
+/// `wl_region` is built from: one row per pixel of each corner's height,
+/// inset to follow the arc, and one rectangle for the straight middle.
+pub fn rounded_region(w: u32, h: u32, radius: u32) -> Vec<(i32, i32, i32, i32)> {
+    let side = |v: u32| i32::try_from(v).unwrap_or(i32::MAX);
+    let (w, h) = (side(w), side(h));
+    let r = side(radius).min(w / 2).min(h / 2).max(0);
+    let mut rects = Vec::with_capacity(2 * r as usize + 1);
+    for y in 0..r {
+        let dy = f64::from(r - y) - 0.5;
+        let inset = (f64::from(r) - (f64::from(r * r) - dy * dy).max(0.0).sqrt()).round() as i32;
+        rects.push((inset, y, w - 2 * inset, 1));
+        rects.push((inset, h - 1 - y, w - 2 * inset, 1));
+    }
+    if h > 2 * r {
+        rects.push((0, r, w, h - 2 * r));
+    }
+    rects
 }
 
 /// The Popup's image at its Theme's icon size and `scale` (in 120ths), if
@@ -688,7 +772,7 @@ impl ProvidesRegistryState for Wayland {
     registry_handlers![OutputState, SeatState];
 }
 
-impl Dispatch2<WpFractionalScaleV1, Wayland> for Scaling {
+impl Dispatch2<WpFractionalScaleV1, Wayland> for Extension {
     fn event(
         &self,
         state: &mut Wayland,
@@ -714,7 +798,7 @@ impl Dispatch2<WpFractionalScaleV1, Wayland> for Scaling {
 /// The objects below send no events.
 macro_rules! no_events {
     ($($interface:ty),*) => {$(
-        impl Dispatch2<$interface, Wayland> for Scaling {
+        impl Dispatch2<$interface, Wayland> for Extension {
             fn event(
                 &self,
                 _: &mut Wayland,
@@ -727,7 +811,34 @@ macro_rules! no_events {
         }
     )*};
 }
-no_events!(WpFractionalScaleManagerV1, WpViewporter, WpViewport);
+no_events!(
+    WpFractionalScaleManagerV1,
+    WpViewporter,
+    WpViewport,
+    ExtBackgroundEffectSurfaceV1
+);
+
+impl Dispatch2<ExtBackgroundEffectManagerV1, Wayland> for Extension {
+    fn event(
+        &self,
+        state: &mut Wayland,
+        _: &ExtBackgroundEffectManagerV1,
+        event: ext_background_effect_manager_v1::Event,
+        _: &Connection,
+        _: &QueueHandle<Wayland>,
+    ) {
+        let ext_background_effect_manager_v1::Event::Capabilities { flags } = event else {
+            return;
+        };
+        let can_blur = flags
+            .into_result()
+            .is_ok_and(|f| f.contains(ext_background_effect_manager_v1::Capability::Blur));
+        if !can_blur && let Some(blur) = state.blur.take() {
+            debug!("the compositor cannot blur; leaving it to layer rules");
+            blur.destroy();
+        }
+    }
+}
 
 delegate_registry!(Wayland);
 delegate_dispatch2!(Wayland);
