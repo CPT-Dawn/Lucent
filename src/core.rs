@@ -450,12 +450,7 @@ impl Core {
         if !self.stack.iter().any(|p| p.id == id) {
             return vec![];
         }
-        let general = &self.config.general;
-        let action = match button {
-            Button::Left => general.left_click,
-            Button::Middle => general.middle_click,
-            Button::Right => general.right_click,
-        };
+        let action = self.config.general.binding(button);
         let mut effects = vec![Effect::CancelTimer(id)];
         match action {
             ClickAction::InvokeDefaultAction => {

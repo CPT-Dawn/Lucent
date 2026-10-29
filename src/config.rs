@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
-use crate::core::Urgency;
+use crate::core::{Button, Urgency};
 use crate::theme::{Theme, ThemeOverride};
 use crate::{debug, error, xdg};
 
@@ -102,6 +102,17 @@ impl Default for General {
             right_click: ClickAction::DismissAll,
             honor_app_timeouts: true,
             body_lines: 4,
+        }
+    }
+}
+
+impl General {
+    /// What a click with `button` does.
+    pub fn binding(&self, button: Button) -> ClickAction {
+        match button {
+            Button::Left => self.left_click,
+            Button::Middle => self.middle_click,
+            Button::Right => self.right_click,
         }
     }
 }
