@@ -13,12 +13,31 @@
 
 [general]
 
-# How long a Popup stays on screen, in milliseconds.
+# How long a Popup stays on screen, in milliseconds, unless the app asks for
+# its own timeout (see `honor_app_timeouts`).
 timeout = 5000
 
 # The most Popups shown at once. Further Notifications wait their turn and
 # appear as earlier ones close.
 max_visible = 5
+
+# What a click on a Popup does, per mouse button. One of:
+#   "invoke-default-action"  run the app's default action, if it has one,
+#                            then dismiss the Popup
+#   "dismiss"                dismiss the Popup without running anything
+#   "dismiss-all"            dismiss every Popup, and any waiting their turn
+#   "none"                   do nothing
+# Hovering a Popup pauses its timeout; it resumes when the pointer leaves.
+left_click = "invoke-default-action"
+middle_click = "dismiss"
+right_click = "dismiss-all"
+# Whether an app's requested timeout (including "never expire") replaces
+# `timeout` above. Set it to false to use `timeout` for every app. Critical
+# Notifications never expire either way.
+honor_app_timeouts = true
+
+# Body lines shown before the rest is cut with an ellipsis.
+body_lines = 4
 
 
 [layout]
@@ -52,11 +71,67 @@ left = 16
 
 [theme]
 
-# The longest side of a Popup's icon or image, in pixels.
-icon_size = 48
+# The built-in Theme to start from. One of:
+#   "midnight-bloom"  dark smoked glass with mint accents, made for blur
+#                     but readable without it (the default)
+#   "light"           paper-white glass with ink text, for light desktops
+#   "opaque"          Midnight Bloom on solid ground, for no blur at all
+# preset = "midnight-bloom"
 
-# The icon theme app icons are looked up in, by directory name under
-# /usr/share/icons or ~/.local/share/icons. Leave it empty to use your GTK
-# icon theme (gtk-icon-theme-name in ~/.config/gtk-3.0/settings.ini), or
-# hicolor if none is set.
-icon_theme = ""
+# Any setting below overrides the Preset; the values shown are Midnight
+# Bloom's. Uncomment only what you want to change, so the rest keeps
+# following the Preset you chose.
+#
+# Colours are "#RRGGBB", "#RRGGBBAA", "rgb(r, g, b)" or "rgba(r, g, b, a)"
+# with a from 0.0 (clear) to 1.0 (solid). Lucent draws no shadows or glows;
+# leave blur and animation to your compositor (namespace "lucent").
+
+# Font family list for all text, as Pango understands it.
+# font = "Inter, sans-serif"
+
+# Text sizes, in points. The summary is semibold.
+# app_name_size = 9
+# summary_size = 11
+# body_size = 10
+
+# Fill behind the text. Below full alpha it lets compositor blur show.
+# background = "rgba(20, 27, 31, 0.82)"
+
+# The 1 px outline, and its brighter top edge that catches the light.
+# border = "rgba(252, 253, 253, 0.13)"
+# border_top = "rgba(252, 253, 253, 0.28)"
+
+# Outline thickness, in pixels; 0 draws none.
+# border_width = 1
+
+# Corner radius, in pixels.
+# radius = 20
+
+# Space between the Popup's edge and its text, in pixels.
+# padding = 16
+
+# Text colours.
+# app_name = "#92A8A9"
+# summary = "#C0CAF5"
+# body = "#A9B1D6"
+
+# The accent line beside the text.
+# accent = "#8DE3DC"
+
+# Width of the accent line, in pixels; 0 draws none.
+# accent_width = 3
+
+# Critical Notifications take this colour for their border and accent.
+# critical = "#F7768E"
+
+# Low-urgency Notifications fade their text and accent to this opacity, in
+# percent, so they don't compete for attention.
+# low_opacity = 60
+
+# The longest side of a Popup's icon or image, in pixels.
+# icon_size = 48
+
+# The icon theme app icons are looked up in, by its directory name under
+# /usr/share/icons or ~/.local/share/icons. Empty uses your GTK icon theme
+# (gtk-icon-theme-name in ~/.config/gtk-3.0/settings.ini), else hicolor.
+# icon_theme = ""

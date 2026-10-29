@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
+use crate::theme::{Theme, ThemeOverride};
 use crate::{debug, error};
 
 /// The fully commented reference config printed by `lucent --default-config`.
@@ -25,7 +26,9 @@ pub const REFERENCE: &str = include_str!("../default_config.toml");
 pub struct Config {
     pub general: General,
     pub layout: Layout,
-    pub theme: Theme,
+    /// `[theme]`: a Preset (Midnight Bloom if unset) and any Theme field
+    /// set on top of it.
+    pub theme: ThemeOverride,
 }
 
 /// `[general]`
@@ -37,6 +40,16 @@ pub struct General {
     pub timeout: Duration,
     /// The most Popups in the Stack; the rest wait in the Queue.
     pub max_visible: usize,
+    /// What each pointer button does on a Popup.
+    pub left_click: ClickAction,
+    pub middle_click: ClickAction,
+    pub right_click: ClickAction,
+    /// Whether a sender's requested timeout replaces `timeout`. Critical
+    /// Notifications never expire either way.
+    #[serde(alias = "honour_app_timeouts")]
+    pub honor_app_timeouts: bool,
+    /// Body lines shown before the rest is cut with an ellipsis.
+    pub body_lines: u32,
 }
 
 impl Default for General {
@@ -44,8 +57,27 @@ impl Default for General {
         Self {
             timeout: Duration::from_secs(5),
             max_visible: 5,
+            left_click: ClickAction::InvokeDefaultAction,
+            middle_click: ClickAction::Dismiss,
+            right_click: ClickAction::DismissAll,
+            honor_app_timeouts: true,
+            body_lines: 4,
         }
     }
+}
+
+/// What a click on a Popup does, bound per button in `[general]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClickAction {
+    /// Run the Default action, if the Notification has one, then dismiss.
+    InvokeDefaultAction,
+    /// Dismiss this Popup without running anything.
+    Dismiss,
+    /// Dismiss every Popup, and the Queue behind them.
+    DismissAll,
+    /// Do nothing.
+    None,
 }
 
 /// `[layout]`
@@ -116,26 +148,6 @@ impl Default for Margin {
     }
 }
 
-/// `[theme]`: the visual settings applied to Popups.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default)]
-pub struct Theme {
-    /// The longest side of a Popup's icon or image, in pixels.
-    pub icon_size: u32,
-    /// The freedesktop icon theme app icons are looked up in; empty means
-    /// the GTK icon theme, falling back to `hicolor`.
-    pub icon_theme: String,
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        Self {
-            icon_size: 48,
-            icon_theme: String::new(),
-        }
-    }
-}
-
 /// Something in the config text Lucent could not use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
@@ -144,6 +156,9 @@ pub enum Problem {
     Invalid(String),
     /// A key Lucent does not know, as a dotted path; it is skipped.
     UnknownKey(String),
+    /// `[theme] preset` names no Preset; Midnight Bloom stands in, with the
+    /// `[theme]` overrides still applied.
+    UnknownPreset(String),
 }
 
 impl std::fmt::Display for Problem {
@@ -151,11 +166,26 @@ impl std::fmt::Display for Problem {
         match self {
             Self::Invalid(e) => write!(f, "invalid config, using the defaults: {e}"),
             Self::UnknownKey(key) => write!(f, "unknown config key `{key}` ignored"),
+            Self::UnknownPreset(name) => {
+                let known: Vec<_> = Theme::PRESETS.iter().map(|(n, _)| *n).collect();
+                write!(
+                    f,
+                    "unknown theme preset `{name}`, using midnight-bloom (have: {})",
+                    known.join(", ")
+                )
+            }
         }
     }
 }
 
 impl Config {
+    /// The Theme `[theme]` resolves to, before any Urgency style.
+    pub fn theme(&self) -> Theme {
+        let mut theme = Theme::default();
+        self.theme.apply(&mut theme);
+        theme
+    }
+
     /// Resolves config text against the defaults. Never fails: anything
     /// unusable is reported and the defaults stand in.
     pub fn parse(text: &str) -> (Config, Vec<Problem>) {
@@ -164,11 +194,15 @@ impl Config {
             Ok(de) => de,
             Err(e) => return (Config::default(), vec![Problem::Invalid(e.to_string())]),
         };
-        match serde_ignored::deserialize(de, |path| unknown.push(path.to_string())) {
-            Ok(config) => (
-                config,
-                unknown.into_iter().map(Problem::UnknownKey).collect(),
-            ),
+        match serde_ignored::deserialize::<_, _, Config>(de, |path| unknown.push(path.to_string()))
+        {
+            Ok(config) => {
+                let mut problems: Vec<_> = unknown.into_iter().map(Problem::UnknownKey).collect();
+                if let Some(name) = config.theme.unknown_preset() {
+                    problems.push(Problem::UnknownPreset(name.into()));
+                }
+                (config, problems)
+            }
             Err(e) => (Config::default(), vec![Problem::Invalid(e.to_string())]),
         }
     }

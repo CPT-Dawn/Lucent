@@ -5,14 +5,14 @@ use std::time::Duration;
 use lucent::config::Config;
 use lucent::core::{CloseReason, Core, Effect, Event, Notification, Popup};
 use lucent::image::Image;
+use lucent::theme::Theme;
 
 fn hello() -> Notification {
     Notification {
         app_name: "notify-send".into(),
         summary: "Hello".into(),
         body: "World".into(),
-        replaces_id: 0,
-        image: None,
+        ..Default::default()
     }
 }
 
@@ -35,6 +35,9 @@ fn notify_shows_a_popup_that_expires_after_the_default_timeout() {
                 body: "World".into(),
                 image: None,
                 more: 0,
+                body_lines: 4,
+                expire: Some(Duration::from_secs(5)),
+                theme: Theme::default(),
             }]),
             Effect::StartTimer {
                 id,

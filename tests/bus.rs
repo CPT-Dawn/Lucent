@@ -154,7 +154,10 @@ fn reports_server_information_and_capabilities_and_accepts_notify() {
     let (caps,): (Vec<String>,) = notifications(&client)
         .method_call(NAME, "GetCapabilities", ())
         .unwrap();
-    assert_eq!(caps, ["body", "body-markup", "icon-static"]);
+    assert_eq!(
+        caps,
+        ["body", "body-hyperlinks", "body-markup", "icon-static"]
+    );
 
     let first = notify(&client, "Hello", "World");
     let second = notify(&client, "Hello", "again");
@@ -407,4 +410,66 @@ fn a_replacement_keeps_the_id_and_an_unknown_replaces_id_gets_a_fresh_one() {
 
     let fresh = notify_replacing(&client, 4242, "stranger", "hi");
     assert!(fresh != id && fresh != 4242, "got {fresh}");
+}
+
+#[test]
+fn clicking_a_notification_with_a_default_action_invokes_it_then_dismisses() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+    listen_for_closed(&client);
+    client
+        .add_match_no_cb(&MatchRule::new_signal(NAME, "ActionInvoked").match_str())
+        .unwrap();
+
+    let (id,): (u32,) = notifications(&client)
+        .method_call(
+            NAME,
+            "Notify",
+            (
+                "mail",
+                0u32,
+                "",
+                "New mail",
+                "",
+                vec!["default", "Open"],
+                PropMap::new(),
+                -1i32,
+            ),
+        )
+        .unwrap();
+    // With drawing off there is no pointer; this test-only call stands in.
+    let () = notifications(&client)
+        .method_call("dev.cptdawn.Lucent.Test", "Click", (id, "left"))
+        .unwrap();
+
+    let mut signals = Vec::new();
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(500) {
+        let Some(msg) = client
+            .channel()
+            .blocking_pop_message(Duration::from_millis(50))
+            .unwrap()
+        else {
+            continue;
+        };
+        match msg.member().as_deref() {
+            Some("ActionInvoked") => {
+                let (id, key) = msg.read2::<u32, String>().unwrap();
+                signals.push(format!("ActionInvoked({id}, {key})"));
+            }
+            Some("NotificationClosed") => {
+                let (id, reason) = msg.read2::<u32, u32>().unwrap();
+                signals.push(format!("NotificationClosed({id}, {reason})"));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        signals,
+        [
+            format!("ActionInvoked({id}, default)"),
+            format!("NotificationClosed({id}, 2)"),
+        ]
+    );
 }

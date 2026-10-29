@@ -3,6 +3,7 @@
 use cairo::{Context, Format, ImageSurface};
 use lucent::core::Popup;
 use lucent::draw;
+use lucent::theme::Theme;
 
 fn popup() -> Popup {
     Popup {
@@ -12,6 +13,9 @@ fn popup() -> Popup {
         body: String::new(),
         image: None,
         more: 0,
+        body_lines: 4,
+        expire: None,
+        theme: Theme::default(),
     }
 }
 

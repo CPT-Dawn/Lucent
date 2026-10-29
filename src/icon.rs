@@ -8,6 +8,7 @@
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use cairo::{Context, Filter, Format, ImageSurface, SurfacePattern};
 use resvg::{tiny_skia, usvg};
@@ -35,7 +36,11 @@ impl Icons {
     /// icon theme, else `hicolor`.
     pub fn new(size: u32, theme: &str) -> Self {
         let theme = if theme.is_empty() {
-            gtk_icon_theme().unwrap_or_else(|| HICOLOR.to_owned())
+            // Read once per process: every Popup asks.
+            static SYSTEM: OnceLock<String> = OnceLock::new();
+            SYSTEM
+                .get_or_init(|| gtk_icon_theme().unwrap_or_else(|| HICOLOR.to_owned()))
+                .clone()
         } else {
             theme.to_owned()
         };

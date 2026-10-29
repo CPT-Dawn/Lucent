@@ -17,14 +17,18 @@ use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
 use dbus::channel::{BusType, Channel};
 use dbus::message::MessageType;
 
-use crate::core::{CloseReason, Effect, Event, Notification};
+use crate::core::{Action, Button, CloseReason, Effect, Event, Notification, Timeout, Urgency};
 use crate::{debug, image};
 
 pub const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 
+/// Stands in for the pointer while drawing is off, so the bus tests can click
+/// a Popup that is never shown. Served only after [`DbusAdapter::enable_test_hooks`].
+const TEST_INTERFACE: &str = "dev.cptdawn.Lucent.Test";
+
 /// Capabilities are added only in the change that implements them.
-const CAPABILITIES: [&str; 3] = ["body", "body-markup", "icon-static"];
+const CAPABILITIES: [&str; 4] = ["body", "body-hyperlinks", "body-markup", "icon-static"];
 
 /// The session bus went away; nothing more can be served.
 #[derive(Debug)]
@@ -32,6 +36,7 @@ pub struct Disconnected;
 
 pub struct DbusAdapter {
     conn: Connection,
+    test_hooks: bool,
 }
 
 impl DbusAdapter {
@@ -42,7 +47,14 @@ impl DbusAdapter {
         channel.set_watch_enabled(true);
         Ok(Self {
             conn: Connection::from(channel),
+            test_hooks: false,
         })
+    }
+
+    /// Serves [`TEST_INTERFACE`]: `Click(u id, s button)` with `left`,
+    /// `middle` or `right` acts as a pointer press on that Popup.
+    pub fn enable_test_hooks(&mut self) {
+        self.test_hooks = true;
     }
 
     /// Claims the well-known name. `Ok(Err(owner))` describes the process that
@@ -120,6 +132,9 @@ impl DbusAdapter {
             interface.as_deref().unwrap_or("?"),
             member.as_deref().unwrap_or("?")
         );
+        if self.test_hooks && interface.as_deref() == Some(TEST_INTERFACE) {
+            return test_hook(msg, handle, pending);
+        }
         if interface.as_deref() != Some(NAME) {
             return unknown_method(msg);
         }
@@ -171,11 +186,22 @@ impl DbusAdapter {
         // wait for the next incoming message.
         channel.flush();
     }
+
+    /// Queues and sends an `ActionInvoked` signal.
+    pub fn emit_action_invoked(&self, id: u32, key: &str) {
+        debug!("ActionInvoked id={id} key={key:?}");
+        let signal = Message::new_signal(PATH, NAME, "ActionInvoked")
+            .expect("static signal names are valid")
+            .append2(id, key);
+        let channel = self.conn.channel();
+        let _ = channel.send(signal);
+        channel.flush();
+    }
 }
 
 fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
     // Signature susssasa{sv}i. The fields not used yet arrive with their tickets.
-    let (app_name, replaces_id, app_icon, summary, body, _actions, hints, _timeout): (
+    let (app_name, replaces_id, app_icon, summary, body, actions, hints, timeout): (
         String,
         u32,
         String,
@@ -193,7 +219,53 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
         summary,
         body,
         replaces_id,
+        // A flat list of key, label pairs; a dangling key has no label.
+        actions: actions
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[key, label]| Action {
+                key: key.clone(),
+                label: label.clone(),
+            })
+            .collect(),
+        urgency: urgency(&hints),
+        timeout: Timeout::from_millis(timeout),
     })
+}
+
+fn test_hook(
+    msg: &Message,
+    handle: &mut impl FnMut(Event) -> Vec<Effect>,
+    pending: &mut Vec<Effect>,
+) -> Message {
+    if msg.member().as_deref() != Some("Click") {
+        return unknown_method(msg);
+    }
+    let button = match msg.read2::<u32, &str>() {
+        Ok((id, "left")) => (id, Button::Left),
+        Ok((id, "middle")) => (id, Button::Middle),
+        Ok((id, "right")) => (id, Button::Right),
+        _ => {
+            return msg.error(
+                &"org.freedesktop.DBus.Error.InvalidArgs".into(),
+                c"expected (u id, s left|middle|right)",
+            );
+        }
+    };
+    let (id, button) = button;
+    pending.extend(handle(Event::Click { id, button }));
+    msg.method_return()
+}
+
+/// The `urgency` hint, a byte by the spec; some senders use other integer
+/// types, so any integer is accepted.
+fn urgency(hints: &PropMap) -> Urgency {
+    hints
+        .get("urgency")
+        .and_then(|v| v.0.as_u64())
+        .and_then(|u| u8::try_from(u).ok())
+        .map_or(Urgency::Normal, Urgency::from_byte)
 }
 
 fn unknown_method(msg: &Message) -> Message {

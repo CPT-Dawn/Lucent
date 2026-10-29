@@ -3,13 +3,19 @@
 
 use std::time::Duration;
 
-use lucent::config::{Anchor, Config, General, Layout, Margin, Problem, Theme};
+use lucent::config::{Anchor, ClickAction, Config, General, Layout, Margin, Problem};
+use lucent::theme::ThemeOverride;
 
 fn defaults() -> Config {
     Config {
         general: General {
             timeout: Duration::from_secs(5),
             max_visible: 5,
+            left_click: ClickAction::InvokeDefaultAction,
+            middle_click: ClickAction::Dismiss,
+            right_click: ClickAction::DismissAll,
+            honor_app_timeouts: true,
+            body_lines: 4,
         },
         layout: Layout {
             anchor: Anchor::TopRight,
@@ -23,10 +29,7 @@ fn defaults() -> Config {
             gap: 8,
             monitor: None,
         },
-        theme: Theme {
-            icon_size: 48,
-            icon_theme: String::new(),
-        },
+        theme: ThemeOverride::default(),
     }
 }
 
@@ -62,6 +65,11 @@ fn a_full_config_sets_every_field() {
         [general]
         timeout = 2500
         max_visible = 3
+        left_click = "dismiss-all"
+        middle_click = "none"
+        right_click = "invoke-default-action"
+        honor_app_timeouts = false
+        body_lines = 2
 
         [layout]
         anchor = "bottom-center"
@@ -74,10 +82,6 @@ fn a_full_config_sets_every_field() {
         right = 2
         bottom = 3
         left = 4
-
-        [theme]
-        icon_size = 64
-        icon_theme = "Papirus-Dark"
         "#,
     );
 
@@ -87,6 +91,11 @@ fn a_full_config_sets_every_field() {
             general: General {
                 timeout: Duration::from_millis(2500),
                 max_visible: 3,
+                left_click: ClickAction::DismissAll,
+                middle_click: ClickAction::None,
+                right_click: ClickAction::InvokeDefaultAction,
+                honor_app_timeouts: false,
+                body_lines: 2,
             },
             layout: Layout {
                 anchor: Anchor::BottomCenter,
@@ -100,10 +109,7 @@ fn a_full_config_sets_every_field() {
                 gap: 12,
                 monitor: Some("HDMI-A-1".into()),
             },
-            theme: Theme {
-                icon_size: 64,
-                icon_theme: "Papirus-Dark".into(),
-            },
+            theme: ThemeOverride::default(),
         }
     );
     assert_eq!(problems, []);
