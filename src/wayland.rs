@@ -8,13 +8,30 @@
 //! Pointer input on a Popup becomes core [`Event`]s, collected during
 //! dispatch for the app to drain with [`Wayland::take_events`]. Popups never
 //! take keyboard focus.
+//!
+//! On a scaled monitor each buffer is drawn at the monitor's scale, so text
+//! stays sharp: fractional scales through `wp_fractional_scale_v1` and a
+//! `wp_viewport`, whole ones through `wl_surface.set_buffer_scale` where
+//! those are missing. Sizes everywhere else are in surface (logical) pixels.
 
 use std::error::Error;
 
 use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
+use smithay_client_toolkit::dispatch2::Dispatch2;
+use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
+    Shape, WpCursorShapeDeviceV1,
+};
+use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+    wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+};
+use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
+    wp_viewport::WpViewport, wp_viewporter::WpViewporter,
+};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::pointer::cursor_shape::CursorShapeManager;
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
@@ -27,7 +44,7 @@ use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
-use wayland_client::{Connection, QueueHandle};
+use wayland_client::{Connection, Proxy, QueueHandle};
 
 use crate::config::{self, Layout};
 use crate::core::{Button, Event, Popup};
@@ -37,11 +54,20 @@ use crate::{debug, draw, error};
 /// The layer namespace compositor rules can target.
 const NAMESPACE: &str = "lucent";
 
+/// Scales are kept in 120ths, as `wp_fractional_scale_v1` sends them.
+const UNSCALED: u32 = 120;
+
 pub struct Wayland {
     registry: RegistryState,
     outputs: OutputState,
     seats: SeatState,
     pointer: Option<wl_pointer::WlPointer>,
+    /// Sets the arrow over Popups, where the compositor offers it; without
+    /// it the pointer keeps whatever image it had.
+    cursor_shapes: Option<CursorShapeManager>,
+    cursor: Option<WpCursorShapeDeviceV1>,
+    /// Both present, or neither: fractional scaling needs the two together.
+    fractional: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
     /// Pointer input waiting for the app, oldest first.
     events: Vec<Event>,
     compositor: CompositorState,
@@ -59,9 +85,17 @@ pub struct Wayland {
 
 struct Surface {
     popup: Popup,
-    /// The Popup's image, loaded once at the icon size; dropped with it.
+    /// The Popup's image, loaded once at the icon size and scale; dropped
+    /// with it.
     icon: Option<cairo::ImageSurface>,
     layer: LayerSurface,
+    /// The scale buffers are drawn at, in 120ths: 120 until the compositor
+    /// says otherwise.
+    scale: u32,
+    /// Present with fractional scaling: maps the scaled buffer back onto
+    /// the surface size.
+    viewport: Option<WpViewport>,
+    fractional: Option<WpFractionalScaleV1>,
     width: u32,
     height: u32,
     /// Distance from the anchor edge, including the outer margin.
@@ -73,6 +107,29 @@ struct Surface {
     /// The Action under the pointer, drawn in the accent colour.
     hovered: Option<usize>,
 }
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        // wayland-rs never destroys a protocol object on its own; these
+        // must go before the layer surface (dropped next) destroys theirs.
+        if let Some(viewport) = self.viewport.take() {
+            viewport.destroy();
+        }
+        if let Some(fractional) = self.fractional.take() {
+            fractional.destroy();
+        }
+    }
+}
+
+/// `logical` surface pixels at `scale` (in 120ths), rounded half away from
+/// zero as `wp_fractional_scale_v1` asks.
+fn scaled(logical: u32, scale: u32) -> u32 {
+    let pixels = (u64::from(logical) * u64::from(scale) + u64::from(UNSCALED / 2)) / 120;
+    u32::try_from(pixels).unwrap_or(u32::MAX)
+}
+
+/// User data for the scaling objects Lucent binds itself.
+struct Scaling;
 
 impl Wayland {
     /// Connects to the compositor named by `WAYLAND_DISPLAY`. The returned
@@ -87,11 +144,18 @@ impl Wayland {
             .map_err(|e| format!("the compositor has no layer-shell support: {e}"))?;
         let shm = Shm::bind(&globals, &qh)?;
         let pool = SlotPool::new((layout.width.max(1) * 120 * 4) as usize, &shm)?;
+        let fractional = globals
+            .bind(&qh, 1..=1, Scaling)
+            .and_then(|manager| Ok((manager, globals.bind(&qh, 1..=1, Scaling)?)))
+            .ok();
         let mut wayland = Self {
             registry: RegistryState::new(&globals),
             outputs: OutputState::new(&globals, &qh),
             seats: SeatState::new(&globals, &qh),
             pointer: None,
+            cursor_shapes: CursorShapeManager::bind(&globals, &qh).ok(),
+            cursor: None,
+            fractional,
             events: Vec::new(),
             compositor,
             layer_shell,
@@ -186,7 +250,7 @@ impl Wayland {
                         &surface.popup.theme.icon_theme,
                     )
             {
-                surface.icon = load_icon(popup);
+                surface.icon = load_icon(popup, surface.scale);
             }
             surface.popup = popup.clone();
             // The Actions may have moved; the next motion finds the right one.
@@ -219,10 +283,17 @@ impl Wayland {
 
     fn open(&mut self, popup: Popup, offset: i32) -> Surface {
         let width = self.layout.width;
-        let icon = load_icon(&popup);
+        let icon = load_icon(&popup, UNSCALED);
         let height = draw::measure(&popup, icon.as_ref(), width);
         let output = self.output();
         let surface = self.compositor.create_surface(&self.qh);
+        let (viewport, fractional) = match &self.fractional {
+            Some((manager, viewporter)) => (
+                Some(viewporter.get_viewport(&surface, &self.qh, Scaling)),
+                Some(manager.get_fractional_scale(&surface, &self.qh, Scaling)),
+            ),
+            None => (None, None),
+        };
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
             surface,
@@ -242,6 +313,9 @@ impl Wayland {
             popup,
             icon,
             layer,
+            scale: UNSCALED,
+            viewport,
+            fractional,
             width,
             height,
             offset,
@@ -252,8 +326,12 @@ impl Wayland {
 
     fn draw(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
         let surface = &self.surfaces[index];
-        let (w, h) = (surface.width as i32, surface.height as i32);
-        let stride = cairo::Format::ARgb32.stride_for_width(surface.width)?;
+        let (bw, bh) = (
+            scaled(surface.width, surface.scale),
+            scaled(surface.height, surface.scale),
+        );
+        let (w, h) = (i32::try_from(bw)?, i32::try_from(bh)?);
+        let stride = cairo::Format::ARgb32.stride_for_width(bw)?;
         let (buffer, canvas) = self
             .pool
             .create_buffer(w, h, stride, wl_shm::Format::Argb8888)?;
@@ -270,6 +348,10 @@ impl Wayland {
                 stride,
             )?;
             let cr = cairo::Context::new(&target)?;
+            cr.scale(
+                f64::from(bw) / f64::from(surface.width.max(1)),
+                f64::from(bh) / f64::from(surface.height.max(1)),
+            );
             let painted = draw::paint(
                 &cr,
                 &surface.popup,
@@ -283,6 +365,14 @@ impl Wayland {
             painted?;
         }
         let wl_surface = surface.layer.wl_surface();
+        match &surface.viewport {
+            Some(viewport) => {
+                let size = |v: u32| i32::try_from(v).unwrap_or(i32::MAX);
+                viewport.set_destination(size(surface.width), size(surface.height));
+            }
+            // Only whole scales get here; 0 must never be sent.
+            None => wl_surface.set_buffer_scale((surface.scale / UNSCALED).max(1) as i32),
+        }
         wl_surface.damage_buffer(0, 0, w, h);
         buffer.attach_to(wl_surface)?;
         surface.layer.commit();
@@ -290,10 +380,13 @@ impl Wayland {
     }
 }
 
-/// The Popup's image at its Theme's icon size, if it has one that loads.
-fn load_icon(popup: &Popup) -> Option<cairo::ImageSurface> {
+/// The Popup's image at its Theme's icon size and `scale` (in 120ths), if
+/// it has one that loads.
+fn load_icon(popup: &Popup, scale: u32) -> Option<cairo::ImageSurface> {
     let image = popup.image.as_ref()?;
-    Icons::new(popup.theme.icon_size, &popup.theme.icon_theme).load(image)
+    Icons::new(popup.theme.icon_size, &popup.theme.icon_theme)
+        .with_scale(f64::from(scale) / f64::from(UNSCALED))
+        .load(image)
 }
 
 fn anchor(anchor: config::Anchor) -> Anchor {
@@ -365,14 +458,46 @@ impl LayerShellHandler for Wayland {
     }
 }
 
+impl Wayland {
+    /// Redraws the Popup on `surface` at `scale` (in 120ths), if that is
+    /// new: its icon is reloaded to match, while its size, in surface
+    /// pixels, stays the same.
+    fn rescale(&mut self, surface: &wl_surface::WlSurface, scale: u32) {
+        let Some(index) = self
+            .surfaces
+            .iter()
+            .position(|s| s.layer.wl_surface() == surface)
+        else {
+            return;
+        };
+        let target = &mut self.surfaces[index];
+        if scale == 0 || target.scale == scale {
+            return;
+        }
+        debug!("popup {} now drawn at scale {scale}/120", target.popup.id);
+        target.scale = scale;
+        target.icon = load_icon(&target.popup, scale);
+        if target.configured
+            && let Err(e) = self.draw(index)
+        {
+            error!("could not redraw popup: {e}");
+        }
+    }
+}
+
 impl CompositorHandler for Wayland {
+    /// The whole-number scale, used only where fractional scaling is missing.
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: i32,
+        surface: &wl_surface::WlSurface,
+        factor: i32,
     ) {
+        if self.fractional.is_none() {
+            let factor = u32::try_from(factor).unwrap_or(1);
+            self.rescale(surface, factor.saturating_mul(UNSCALED));
+        }
     }
 
     fn transform_changed(
@@ -434,7 +559,13 @@ impl SeatHandler for Wayland {
     ) {
         if capability == Capability::Pointer && self.pointer.is_none() {
             match self.seats.get_pointer(qh, &seat) {
-                Ok(pointer) => self.pointer = Some(pointer),
+                Ok(pointer) => {
+                    self.cursor = self
+                        .cursor_shapes
+                        .as_ref()
+                        .map(|shapes| shapes.get_shape_device(&pointer, qh));
+                    self.pointer = Some(pointer);
+                }
                 Err(e) => error!("could not use the pointer: {e}"),
             }
         }
@@ -450,6 +581,9 @@ impl SeatHandler for Wayland {
         if capability == Capability::Pointer
             && let Some(pointer) = self.pointer.take()
         {
+            if let Some(cursor) = self.cursor.take() {
+                cursor.destroy();
+            }
             pointer.release();
         }
     }
@@ -476,7 +610,10 @@ impl PointerHandler for Wayland {
             let (x, y) = event.position;
             let id = self.surfaces[index].popup.id;
             let event = match event.kind {
-                PointerEventKind::Enter { .. } => {
+                PointerEventKind::Enter { serial } => {
+                    if let Some(cursor) = &self.cursor {
+                        cursor.set_shape(serial, Shape::Default);
+                    }
                     self.hover_action(index, x, y);
                     Event::HoverStart(id)
                 }
@@ -550,6 +687,47 @@ impl ProvidesRegistryState for Wayland {
     }
     registry_handlers![OutputState, SeatState];
 }
+
+impl Dispatch2<WpFractionalScaleV1, Wayland> for Scaling {
+    fn event(
+        &self,
+        state: &mut Wayland,
+        proxy: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        _: &Connection,
+        _: &QueueHandle<Wayland>,
+    ) {
+        let wp_fractional_scale_v1::Event::PreferredScale { scale } = event else {
+            return;
+        };
+        let surface = state
+            .surfaces
+            .iter()
+            .find(|s| s.fractional.as_ref() == Some(proxy))
+            .map(|s| s.layer.wl_surface().clone());
+        if let Some(surface) = surface {
+            state.rescale(&surface, scale);
+        }
+    }
+}
+
+/// The objects below send no events.
+macro_rules! no_events {
+    ($($interface:ty),*) => {$(
+        impl Dispatch2<$interface, Wayland> for Scaling {
+            fn event(
+                &self,
+                _: &mut Wayland,
+                _: &$interface,
+                _: <$interface as Proxy>::Event,
+                _: &Connection,
+                _: &QueueHandle<Wayland>,
+            ) {
+            }
+        }
+    )*};
+}
+no_events!(WpFractionalScaleManagerV1, WpViewporter, WpViewport);
 
 delegate_registry!(Wayland);
 delegate_dispatch2!(Wayland);

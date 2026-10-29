@@ -3,7 +3,9 @@
 //! freedesktop icon theme (`linicon`).
 //!
 //! An image is loaded once, when its Popup opens or its image changes, and the
-//! surface lives only as long as that Popup. Anything that cannot be loaded
+//! surface lives only as long as that Popup. On a scaled monitor it holds
+//! more pixels than the icon size, with a Cairo device scale saying so:
+//! drawn at the icon size, it then fills every device pixel. Anything that cannot be loaded
 //! is logged at debug level and the Popup is shown without an icon.
 
 use std::io::Cursor;
@@ -26,6 +28,8 @@ const HICOLOR: &str = "hicolor";
 #[derive(Debug, Clone)]
 pub struct Icons {
     size: u32,
+    /// Device pixels per icon pixel.
+    scale: f64,
     theme: String,
     /// `$XDG_DATA_HOME/icons`, where the user's own icon themes live;
     /// `linicon` searches only `~/.icons` and `$XDG_DATA_DIRS` itself.
@@ -51,9 +55,24 @@ impl Icons {
             .collect();
         Self {
             size: size.max(1),
+            scale: 1.0,
             theme,
             search_paths,
         }
+    }
+
+    /// Loads for a monitor at `scale` (1.0 unless set), in device pixels per
+    /// surface pixel.
+    pub fn with_scale(mut self, scale: f64) -> Self {
+        if scale.is_finite() && scale > 0.0 {
+            self.scale = scale;
+        }
+        self
+    }
+
+    /// The longest side, in device pixels.
+    fn device_size(&self) -> u32 {
+        (f64::from(self.size) * self.scale).round().max(1.0) as u32
     }
 
     /// The image scaled so its longest side is the icon size, or `None` if
@@ -86,7 +105,7 @@ impl Icons {
             }
         };
         let usable = |icon: &linicon::IconPath| icon.icon_type != linicon::IconType::XMP;
-        let size = u16::try_from(self.size).unwrap_or(u16::MAX);
+        let size = u16::try_from(self.device_size()).unwrap_or(u16::MAX);
         if let Some(icon) = search().with_size(size).filter_map(Result::ok).find(usable) {
             return Some(icon.path);
         }
@@ -151,7 +170,7 @@ impl Icons {
         let tree =
             usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|e| e.to_string())?;
         let svg = tree.size();
-        let (w, h) = self.fitted(svg.width() as f64, svg.height() as f64);
+        let (w, h) = self.device(self.fitted(svg.width() as f64, svg.height() as f64));
         let mut pixmap = tiny_skia::Pixmap::new(w as u32, h as u32).ok_or("empty SVG")?;
         let transform =
             tiny_skia::Transform::from_scale(w as f32 / svg.width(), h as f32 / svg.height());
@@ -172,7 +191,15 @@ impl Icons {
                 data[y * stride + x * 4..][..4].copy_from_slice(&argb.to_ne_bytes());
             }
         }
+        let logical = self.fitted(svg.width() as f64, svg.height() as f64);
+        set_scale(&surface, logical);
         Ok(surface)
+    }
+
+    /// `logical`, an icon-pixel size from [`Self::fitted`], in device pixels.
+    fn device(&self, (w, h): (i32, i32)) -> (i32, i32) {
+        let side = |v: i32| ((f64::from(v) * self.scale).round() as i32).max(1);
+        (side(w), side(h))
     }
 
     /// The size an image of `w`x`h` is drawn at: its longest side is the
@@ -187,7 +214,8 @@ impl Icons {
     /// `src` scaled once to the icon size, smoothly in both directions.
     fn fit(&self, src: &ImageSurface) -> Result<ImageSurface, String> {
         let (sw, sh) = (src.width() as f64, src.height() as f64);
-        let (w, h) = self.fitted(sw, sh);
+        let logical = self.fitted(sw, sh);
+        let (w, h) = self.device(logical);
         let out = ImageSurface::create(Format::ARgb32, w, h).map_err(|e| e.to_string())?;
         let cr = Context::new(&out).map_err(|e| e.to_string())?;
         cr.scale(w as f64 / sw, h as f64 / sh);
@@ -196,8 +224,28 @@ impl Icons {
         cr.set_source(&pattern).map_err(|e| e.to_string())?;
         cr.paint().map_err(|e| e.to_string())?;
         drop(cr);
+        set_scale(&out, logical);
         Ok(out)
     }
+}
+
+/// Gives `surface` the device scale that makes it `logical` icon pixels
+/// in size, whatever it holds in device pixels.
+fn set_scale(surface: &ImageSurface, (w, h): (i32, i32)) {
+    surface.set_device_scale(
+        f64::from(surface.width()) / f64::from(w.max(1)),
+        f64::from(surface.height()) / f64::from(h.max(1)),
+    );
+}
+
+/// An icon's size in surface pixels: its pixels divided by its device
+/// scale, which [`Icons`] sets on every surface it loads.
+pub fn extent(icon: &ImageSurface) -> (f64, f64) {
+    let (sx, sy) = icon.device_scale();
+    (
+        f64::from(icon.width()) / sx.max(f64::MIN_POSITIVE),
+        f64::from(icon.height()) / sy.max(f64::MIN_POSITIVE),
+    )
 }
 
 fn is_svg(path: &Path, bytes: &[u8]) -> bool {

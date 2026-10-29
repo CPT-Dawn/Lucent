@@ -4,10 +4,11 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use cairo::{Context, Format, ImageSurface, LinearGradient, Operator};
+use cairo::{Context, FontOptions, Format, HintMetrics, ImageSurface, LinearGradient, Operator};
 use pango::{EllipsizeMode, FontDescription, Layout, WrapMode};
 
 use crate::core::Popup;
+use crate::icon;
 use crate::theme::Rgba;
 
 const LINE_GAP: f64 = 4.0;
@@ -19,7 +20,19 @@ const ICON_GAP: f64 = 12.0;
 /// Where the text starts: beside the icon if there is one.
 fn text_left(popup: &Popup, icon: Option<&ImageSurface>) -> f64 {
     let padding = f64::from(popup.theme.padding);
-    icon.map_or(padding, |icon| padding + icon.width() as f64 + ICON_GAP)
+    icon.map_or(padding, |icon| padding + icon::extent(icon).0 + ICON_GAP)
+}
+
+/// A Pango context for `cr` whose glyph advances are not rounded to whole
+/// device pixels, so text lays out the same at every scale: a Popup measured
+/// before its monitor's scale is known still fits once drawn at it.
+fn text_context(cr: &Context) -> pango::Context {
+    let context = pangocairo::functions::create_context(cr);
+    if let Ok(mut options) = FontOptions::new() {
+        options.set_hint_metrics(HintMetrics::Off);
+        pangocairo::functions::context_set_font_options(&context, Some(&options));
+    }
+    context
 }
 /// Actions: at most this many share a row; more wrap below.
 const ACTIONS_PER_ROW: usize = 3;
@@ -35,8 +48,9 @@ fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, R
     let theme = &popup.theme;
     let padding = f64::from(theme.padding);
     let text_width = ((width as f64 - left - padding).max(0.0) * pango::SCALE as f64) as i32;
+    let context = text_context(cr);
     let block = |style: &str, size: u32, max_lines: i32| {
-        let layout = pangocairo::functions::create_layout(cr);
+        let layout = Layout::new(&context);
         layout.set_font_description(Some(&FontDescription::from_string(&format!(
             "{} {style} {size}",
             theme.font
@@ -131,7 +145,7 @@ impl Rect {
 /// beside them if that is taller.
 fn body_height(text: &[(Layout, Rgba)], popup: &Popup, icon: Option<&ImageSurface>) -> f64 {
     let text = content_height(text) + bar_room(popup);
-    text.max(icon.map_or(0.0, |icon| icon.height() as f64))
+    text.max(icon.map_or(0.0, |icon| icon::extent(icon).1))
 }
 
 /// The height of the Popup's body at `width`, laid out on a scratch surface.
@@ -268,6 +282,7 @@ pub fn paint(
     let body = body_height(&blocks, popup, icon);
     let rects = layout_actions(popup.actions.len(), body, width, padding);
     let action_radius = ACTION_RADIUS.min(f64::from(theme.radius));
+    let labels = text_context(cr);
     for (index, (action, rect)) in popup.actions.iter().zip(&rects).enumerate() {
         // Resting Actions are a faint wash of the summary colour, so they
         // suit light and dark Themes alike; the hovered one takes the
@@ -288,7 +303,7 @@ pub fn paint(
         cr.fill()?;
 
         // One line, centred, cut with an ellipsis when it does not fit.
-        let label = pangocairo::functions::create_layout(cr);
+        let label = Layout::new(&labels);
         label.set_font_description(Some(&FontDescription::from_string(&format!(
             "{} Medium {}",
             theme.font, theme.app_name_size
