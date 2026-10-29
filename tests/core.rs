@@ -32,6 +32,7 @@ fn notify_shows_a_popup_that_expires_after_the_default_timeout() {
                 app_name: "notify-send".into(),
                 summary: "Hello".into(),
                 body: "World".into(),
+                actions: vec![],
                 more: 0,
             }]),
             Effect::StartTimer {

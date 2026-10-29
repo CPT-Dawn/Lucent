@@ -48,6 +48,9 @@ pub struct Popup {
     pub app_name: String,
     pub summary: String,
     pub body: String,
+    /// The Actions to show as buttons, in the sender's order. The Default
+    /// action is never among them: clicking the Popup itself runs that.
+    pub actions: Vec<Action>,
     /// Notifications waiting in the Queue, shown as a "+N more" hint. Only the
     /// last Popup of the Stack carries a non-zero count.
     pub more: usize,
@@ -77,6 +80,11 @@ pub enum Event {
         id: u32,
         button: Button,
     },
+    /// The user pressed the button for the Action `key` on this Popup.
+    InvokeAction {
+        id: u32,
+        key: String,
+    },
     /// The pointer moved onto this Notification's Popup.
     HoverStart(u32),
     /// The pointer left this Notification's Popup.
@@ -98,6 +106,15 @@ pub enum Effect {
     Closed { id: u32, reason: CloseReason },
     /// Emit `ActionInvoked` for `id` with the Action's `key`.
     ActionInvoked { id: u32, key: String },
+}
+
+/// The Actions that become buttons: all but the Default action.
+fn buttons(actions: &[Action]) -> Vec<Action> {
+    actions
+        .iter()
+        .filter(|a| a.key != DEFAULT_ACTION)
+        .cloned()
+        .collect()
 }
 
 /// Where a visible Popup's timeout stands.
@@ -182,6 +199,7 @@ impl Core {
             Event::TimerFired(id) => self.expire(id),
             Event::Close(id) => self.close(id),
             Event::Click { id, button } => self.click(id, button),
+            Event::InvokeAction { id, key } => self.invoke_action(id, key),
             Event::HoverStart(id) => self.hover_start(id),
             Event::HoverEnd(id) => self.hover_end(id),
         }
@@ -193,14 +211,15 @@ impl Core {
         }
         self.last_id = self.last_id.wrapping_add(1).max(1);
         let id = self.last_id;
-        self.set_actions(id, n.actions);
         let popup = Popup {
             id,
             app_name: n.app_name,
             summary: n.summary,
             body: n.body,
+            actions: buttons(&n.actions),
             more: 0,
         };
+        self.set_actions(id, n.actions);
         if self.stack.len() >= self.max_visible {
             self.queue.push_back(popup);
             return vec![Effect::Accepted(id), self.stack_effect()];
@@ -219,6 +238,7 @@ impl Core {
             p.app_name.clone_from(&n.app_name);
             p.summary.clone_from(&n.summary);
             p.body.clone_from(&n.body);
+            p.actions = buttons(&n.actions);
         };
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
             update(popup);
@@ -279,6 +299,21 @@ impl Core {
             ClickAction::DismissAll => return self.dismiss_all(),
             ClickAction::None => return vec![],
         }
+        self.remove(id, CloseReason::Dismissed, effects)
+    }
+
+    /// Runs one of a shown Popup's Actions, then dismisses it. A key the
+    /// Notification does not offer does nothing.
+    fn invoke_action(&mut self, id: u32, key: String) -> Vec<Effect> {
+        let offered = self.stack.iter().any(|p| p.id == id)
+            && self
+                .actions
+                .get(&id)
+                .is_some_and(|a| a.iter().any(|a| a.key == key));
+        if !offered {
+            return vec![];
+        }
+        let effects = vec![Effect::CancelTimer(id), Effect::ActionInvoked { id, key }];
         self.remove(id, CloseReason::Dismissed, effects)
     }
 

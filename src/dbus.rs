@@ -28,7 +28,7 @@ const PATH: &str = "/org/freedesktop/Notifications";
 const TEST_INTERFACE: &str = "dev.cptdawn.Lucent.Test";
 
 /// Capabilities are added only in the change that implements them.
-const CAPABILITIES: [&str; 2] = ["body", "body-markup"];
+const CAPABILITIES: [&str; 3] = ["actions", "body", "body-markup"];
 
 /// The session bus went away; nothing more can be served.
 #[derive(Debug)]
@@ -52,7 +52,8 @@ impl DbusAdapter {
     }
 
     /// Serves [`TEST_INTERFACE`]: `Click(u id, s button)` with `left`,
-    /// `middle` or `right` acts as a pointer press on that Popup.
+    /// `middle` or `right` acts as a pointer press on that Popup, and
+    /// `InvokeAction(u id, s key)` as a press on its button for Action `key`.
     pub fn enable_test_hooks(&mut self) {
         self.test_hooks = true;
     }
@@ -235,22 +236,39 @@ fn test_hook(
     handle: &mut impl FnMut(Event) -> Vec<Effect>,
     pending: &mut Vec<Effect>,
 ) -> Message {
-    if msg.member().as_deref() != Some("Click") {
-        return unknown_method(msg);
-    }
-    let button = match msg.read2::<u32, &str>() {
-        Ok((id, "left")) => (id, Button::Left),
-        Ok((id, "middle")) => (id, Button::Middle),
-        Ok((id, "right")) => (id, Button::Right),
-        _ => {
-            return msg.error(
-                &"org.freedesktop.DBus.Error.InvalidArgs".into(),
-                c"expected (u id, s left|middle|right)",
-            );
-        }
+    let event = match msg.member().as_deref() {
+        Some("Click") => match msg.read2::<u32, &str>() {
+            Ok((id, "left")) => Event::Click {
+                id,
+                button: Button::Left,
+            },
+            Ok((id, "middle")) => Event::Click {
+                id,
+                button: Button::Middle,
+            },
+            Ok((id, "right")) => Event::Click {
+                id,
+                button: Button::Right,
+            },
+            _ => {
+                return msg.error(
+                    &"org.freedesktop.DBus.Error.InvalidArgs".into(),
+                    c"expected (u id, s left|middle|right)",
+                );
+            }
+        },
+        Some("InvokeAction") => match msg.read2::<u32, String>() {
+            Ok((id, key)) => Event::InvokeAction { id, key },
+            Err(_) => {
+                return msg.error(
+                    &"org.freedesktop.DBus.Error.InvalidArgs".into(),
+                    c"expected (u id, s key)",
+                );
+            }
+        },
+        _ => return unknown_method(msg),
     };
-    let (id, button) = button;
-    pending.extend(handle(Event::Click { id, button }));
+    pending.extend(handle(event));
     msg.method_return()
 }
 

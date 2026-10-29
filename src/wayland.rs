@@ -67,6 +67,10 @@ struct Surface {
     offset: i32,
     /// Whether the first configure has arrived, so drawing is allowed.
     configured: bool,
+    /// Where the Action buttons sit, kept so pointer motion needs no layout.
+    buttons: Vec<draw::Rect>,
+    /// The Action button under the pointer, drawn in the accent colour.
+    hovered: Option<usize>,
 }
 
 impl Wayland {
@@ -174,6 +178,9 @@ impl Wayland {
         let mut redraw = false;
         if surface.popup != *popup {
             surface.popup = popup.clone();
+            // The buttons may have moved; the next motion finds the right one.
+            surface.hovered = None;
+            surface.buttons = draw::buttons(popup, surface.width);
             let height = draw::measure(popup, surface.width);
             if height != surface.height {
                 // The configure answering this commit redraws at the new size.
@@ -219,12 +226,14 @@ impl Wayland {
         layer.commit();
         debug!("opened popup {} ({width}x{height})", popup.id);
         Surface {
+            buttons: draw::buttons(&popup, width),
             popup,
             layer,
             width,
             height,
             offset,
             configured: false,
+            hovered: None,
         }
     }
 
@@ -248,7 +257,13 @@ impl Wayland {
                 stride,
             )?;
             let cr = cairo::Context::new(&target)?;
-            let painted = draw::paint(&cr, &surface.popup, surface.width, surface.height);
+            let painted = draw::paint(
+                &cr,
+                &surface.popup,
+                surface.width,
+                surface.height,
+                surface.hovered,
+            );
             drop(cr);
             target.finish();
             painted?;
@@ -316,8 +331,9 @@ impl LayerShellHandler for Wayland {
         let surface = &mut self.surfaces[index];
         surface.configured = true;
         // Zero means "pick your own size": keep ours.
-        if configure.new_size.0 != 0 {
+        if configure.new_size.0 != 0 && configure.new_size.0 != surface.width {
             surface.width = configure.new_size.0;
+            surface.buttons = draw::buttons(&surface.popup, surface.width);
         }
         if configure.new_size.1 != 0 {
             surface.height = configure.new_size.1;
@@ -429,22 +445,42 @@ impl PointerHandler for Wayland {
         events: &[PointerEvent],
     ) {
         for event in events {
-            let Some(id) = self
+            let Some(index) = self
                 .surfaces
                 .iter()
-                .find(|s| s.layer.wl_surface() == &event.surface)
-                .map(|s| s.popup.id)
+                .position(|s| s.layer.wl_surface() == &event.surface)
             else {
                 continue;
             };
+            let (x, y) = event.position;
+            let id = self.surfaces[index].popup.id;
             let event = match event.kind {
-                PointerEventKind::Enter { .. } => Event::HoverStart(id),
-                PointerEventKind::Leave { .. } => Event::HoverEnd(id),
+                PointerEventKind::Enter { .. } => {
+                    self.hover_button(index, x, y);
+                    Event::HoverStart(id)
+                }
+                PointerEventKind::Leave { .. } => {
+                    self.set_hovered(index, None);
+                    Event::HoverEnd(id)
+                }
+                PointerEventKind::Motion { .. } => {
+                    self.hover_button(index, x, y);
+                    continue;
+                }
                 PointerEventKind::Press { button, .. } => match button {
-                    BTN_LEFT => Event::Click {
-                        id,
-                        button: Button::Left,
-                    },
+                    BTN_LEFT => {
+                        let surface = &self.surfaces[index];
+                        match surface.buttons.iter().position(|b| b.contains(x, y)) {
+                            Some(at) => Event::InvokeAction {
+                                id,
+                                key: surface.popup.actions[at].key.clone(),
+                            },
+                            None => Event::Click {
+                                id,
+                                button: Button::Left,
+                            },
+                        }
+                    }
                     BTN_MIDDLE => Event::Click {
                         id,
                         button: Button::Middle,
@@ -458,6 +494,32 @@ impl PointerHandler for Wayland {
                 _ => continue,
             };
             self.events.push(event);
+        }
+    }
+}
+
+impl Wayland {
+    /// Highlights whichever Action button of the Popup at `index` lies under
+    /// (`x`, `y`).
+    fn hover_button(&mut self, index: usize, x: f64, y: f64) {
+        let hovered = self.surfaces[index]
+            .buttons
+            .iter()
+            .position(|b| b.contains(x, y));
+        self.set_hovered(index, hovered);
+    }
+
+    /// Redraws the Popup at `index` only when its highlighted button changes.
+    fn set_hovered(&mut self, index: usize, hovered: Option<usize>) {
+        let surface = &mut self.surfaces[index];
+        if surface.hovered == hovered {
+            return;
+        }
+        surface.hovered = hovered;
+        if surface.configured
+            && let Err(e) = self.draw(index)
+        {
+            error!("could not redraw popup: {e}");
         }
     }
 }
