@@ -6,6 +6,13 @@ use std::time::Duration;
 use lucent::config::Config;
 use lucent::core::{Core, Effect, Event, Notification, Timeout, Urgency};
 
+/// A core whose Stack holds at most `max_visible` Popups, set as a user would.
+fn showing_at_most(max_visible: usize) -> Core {
+    let (config, problems) = Config::parse(&format!("general.max_visible = {max_visible}"));
+    assert_eq!(problems, []);
+    Core::with_config(config)
+}
+
 fn sent(urgency: Urgency, timeout: Timeout) -> Notification {
     Notification {
         summary: "s".into(),
@@ -69,7 +76,7 @@ fn shown(core: &mut Core) -> u32 {
 
 #[test]
 fn a_queued_critical_notification_starts_no_timer_once_shown() {
-    let mut core = Core::with_max_visible(1);
+    let mut core = showing_at_most(1);
     let first = shown(&mut core);
     let queued = sent(Urgency::Critical, Timeout::After(Duration::from_secs(1)));
     assert_eq!(notify(&mut core, queued), []);

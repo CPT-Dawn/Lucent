@@ -7,6 +7,13 @@ use lucent::core::{Button, CloseReason, Core, Effect, Event, Notification, Popup
 use lucent::image::Image;
 use lucent::theme::Theme;
 
+/// A core whose Stack holds at most `max_visible` Popups, set as a user would.
+fn showing_at_most(max_visible: usize) -> Core {
+    let (config, problems) = Config::parse(&format!("general.max_visible = {max_visible}"));
+    assert_eq!(problems, []);
+    Core::with_config(config)
+}
+
 fn hello() -> Notification {
     Notification {
         app_name: "notify-send".into(),
@@ -129,7 +136,7 @@ fn starts_a_timer(effects: &[Effect]) -> bool {
 
 #[test]
 fn notifications_beyond_the_cap_wait_in_the_queue_behind_a_more_hint() {
-    let mut core = Core::with_max_visible(2);
+    let mut core = showing_at_most(2);
     notify(&mut core, titled("a"));
     notify(&mut core, titled("b"));
     notify(&mut core, titled("c"));
@@ -144,7 +151,7 @@ fn notifications_beyond_the_cap_wait_in_the_queue_behind_a_more_hint() {
 
 #[test]
 fn the_queue_drains_oldest_first_as_popups_expire() {
-    let mut core = Core::with_max_visible(2);
+    let mut core = showing_at_most(2);
     let a = notify(&mut core, titled("a"));
     let b = notify(&mut core, titled("b"));
     let c = notify(&mut core, titled("c"));
@@ -206,7 +213,7 @@ fn a_replaces_id_that_matches_nothing_gets_a_fresh_id() {
 
 #[test]
 fn a_replacement_for_a_queued_notification_updates_it_where_it_waits() {
-    let mut core = Core::with_max_visible(1);
+    let mut core = showing_at_most(1);
     let shown = notify(&mut core, titled("shown"));
     let waiting = notify(&mut core, titled("download 10%"));
 
@@ -224,7 +231,7 @@ fn closed(id: u32, reason: CloseReason) -> Effect {
 
 #[test]
 fn closing_a_popup_cancels_its_timeout_and_makes_room_for_the_queue() {
-    let mut core = Core::with_max_visible(1);
+    let mut core = showing_at_most(1);
     let shown = notify(&mut core, titled("shown"));
     let waiting = notify(&mut core, titled("waiting"));
 
@@ -245,7 +252,7 @@ fn closing_a_popup_cancels_its_timeout_and_makes_room_for_the_queue() {
 
 #[test]
 fn closing_a_queued_notification_shrinks_the_more_hint() {
-    let mut core = Core::with_max_visible(1);
+    let mut core = showing_at_most(1);
     notify(&mut core, titled("shown"));
     let waiting = notify(&mut core, titled("waiting"));
     notify(&mut core, titled("also waiting"));

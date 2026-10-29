@@ -8,6 +8,13 @@ use std::time::{Duration, Instant};
 use lucent::config::Config;
 use lucent::core::{Action, Button, CloseReason, Core, Effect, Event, Notification};
 
+/// A core whose Stack holds at most `max_visible` Popups, set as a user would.
+fn showing_at_most(max_visible: usize) -> Core {
+    let (config, problems) = Config::parse(&format!("general.max_visible = {max_visible}"));
+    assert_eq!(problems, []);
+    Core::with_config(config)
+}
+
 fn with_actions(summary: &str, actions: &[(&str, &str)]) -> Notification {
     Notification {
         app_name: "mail".into(),
@@ -98,7 +105,7 @@ fn middle_click_dismisses_without_running_anything() {
 
 #[test]
 fn right_click_dismisses_every_popup_and_the_queue_without_running_anything() {
-    let mut core = Core::with_max_visible(2);
+    let mut core = showing_at_most(2);
     let first = notify(&mut core, with_actions("first", &[("default", "Open")]));
     let second = notify(&mut core, with_actions("second", &[]));
     let queued = notify(&mut core, with_actions("queued", &[]));

@@ -269,13 +269,6 @@ impl Core {
         self
     }
 
-    /// The defaults, except the Stack shows at most `max_visible` Popups.
-    pub fn with_max_visible(max_visible: usize) -> Self {
-        let mut config = Config::default();
-        config.general.max_visible = max_visible;
-        Self::with_config(config)
-    }
-
     /// Continues numbering after `last_id`, the last id an earlier run handed
     /// out, so ids keep increasing across Idle exits.
     pub fn resuming_after(mut self, last_id: u32) -> Self {
