@@ -112,7 +112,7 @@ impl DbusAdapter {
         self.conn.channel().watch().fd
     }
 
-    /// Reads and answers every pending message. Each request is turned into an
+    /// Reads and answers every queued message. Each request is turned into an
     /// [`Event`] and passed to `handle`; the effects it returns that the
     /// adapter does not consume itself are handed back for the caller to apply.
     ///
@@ -127,25 +127,25 @@ impl DbusAdapter {
         channel
             .read_write(Some(Duration::ZERO))
             .map_err(|()| Disconnected)?;
-        let mut pending = Vec::new();
+        let mut to_apply = Vec::new();
         while let Some(msg) = channel.pop_message() {
             if msg.msg_type() != MessageType::MethodCall {
                 continue;
             }
-            let reply = self.answer(&msg, &mut handle, &mut pending);
+            let reply = self.answer(&msg, &mut handle, &mut to_apply);
             if !msg.get_no_reply() {
                 let _ = channel.send(reply);
             }
         }
         channel.flush();
-        Ok(pending)
+        Ok(to_apply)
     }
 
     fn answer(
         &self,
         msg: &Message,
         handle: &mut impl FnMut(Event) -> Vec<Effect>,
-        pending: &mut Vec<Effect>,
+        to_apply: &mut Vec<Effect>,
     ) -> Message {
         let interface = msg.interface();
         let member = msg.member();
@@ -156,7 +156,7 @@ impl DbusAdapter {
         );
         #[cfg(feature = "test-hooks")]
         if self.test_hooks && interface.as_deref() == Some(TEST_INTERFACE) {
-            return test_hook(msg, handle, pending);
+            return test_hook(msg, handle, to_apply);
         }
         if interface.as_deref() != Some(NAME) {
             return unknown_method(msg);
@@ -173,7 +173,7 @@ impl DbusAdapter {
                     for effect in handle(Event::Notify(n)) {
                         match effect {
                             Effect::Accepted(accepted) => id = accepted,
-                            other => pending.push(other),
+                            other => to_apply.push(other),
                         }
                     }
                     msg.method_return().append1(id)
@@ -185,7 +185,7 @@ impl DbusAdapter {
             },
             Some("CloseNotification") => match msg.read1::<u32>() {
                 Ok(id) => {
-                    pending.extend(handle(Event::Close(id)));
+                    to_apply.extend(handle(Event::Close(id)));
                     msg.method_return()
                 }
                 Err(e) => msg.error(
@@ -263,7 +263,7 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
 fn test_hook(
     msg: &Message,
     handle: &mut impl FnMut(Event) -> Vec<Effect>,
-    pending: &mut Vec<Effect>,
+    to_apply: &mut Vec<Effect>,
 ) -> Message {
     use crate::core::Button;
     let event = match msg.member().as_deref() {
@@ -290,7 +290,7 @@ fn test_hook(
         },
         _ => return unknown_method(msg),
     };
-    pending.extend(handle(event));
+    to_apply.extend(handle(event));
     msg.method_return()
 }
 
