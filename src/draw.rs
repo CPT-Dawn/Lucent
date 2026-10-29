@@ -44,7 +44,7 @@ fn layouts(cr: &Context, popup: &Popup, width: u32) -> Vec<(Layout, Rgba)> {
         layout
     };
 
-    let mut blocks = Vec::with_capacity(3);
+    let mut blocks = Vec::with_capacity(4);
     if !popup.app_name.is_empty() {
         let layout = block("9", 1);
         layout.set_text(&popup.app_name);
@@ -63,6 +63,12 @@ fn layouts(cr: &Context, popup: &Popup, width: u32) -> Vec<(Layout, Rgba)> {
             layout.set_text(&popup.body);
         }
         blocks.push((layout, BODY));
+    }
+    if popup.more > 0 {
+        let layout = block("9", 1);
+        layout.set_text(&format!("+{} more", popup.more));
+        layout.set_alignment(pango::Alignment::Right);
+        blocks.push((layout, APP_NAME));
     }
     blocks
 }
