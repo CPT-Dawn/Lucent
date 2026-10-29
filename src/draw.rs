@@ -104,7 +104,7 @@ fn content_height(blocks: &[(Layout, Rgba)]) -> f64 {
 
 /// The room a Popup's progress bar takes, gap included; none without one.
 fn bar_room(popup: &Popup) -> f64 {
-    if popup.value.is_some() {
+    if popup.progress.is_some() {
         BAR_HEIGHT + LINE_GAP
     } else {
         0.0
@@ -320,7 +320,7 @@ fn progress_bar(
     y: f64,
     w: f64,
 ) -> Result<f64, cairo::Error> {
-    let Some(value) = popup.value else {
+    let Some(progress) = popup.progress else {
         return Ok(0.0);
     };
     let theme = &popup.theme;
@@ -332,7 +332,7 @@ fn progress_bar(
     cr.fill_preserve()?;
     // Clip to the pill so even a sliver of fill keeps its rounded end.
     cr.clip();
-    cr.rectangle(left, y, width * f64::from(value) / 100.0, BAR_HEIGHT);
+    cr.rectangle(left, y, width * f64::from(progress) / 100.0, BAR_HEIGHT);
     set_source(cr, theme.progress_fill);
     cr.fill()?;
     cr.restore()?;

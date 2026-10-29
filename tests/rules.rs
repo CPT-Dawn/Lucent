@@ -183,7 +183,7 @@ fn a_rule_cannot_make_a_critical_notification_expire() {
 
     let (popup, timer) = shown(text, sent("a", Urgency::Critical));
     assert_eq!(timer, None);
-    assert_eq!(popup.expire, None);
+    assert_eq!(popup.timeout, None);
 }
 
 /// The reference config's Rule example, indented under `#   `, works once

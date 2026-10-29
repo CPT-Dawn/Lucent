@@ -24,8 +24,8 @@ fn popup(labels: &[&str]) -> Popup {
             .collect(),
         more: 0,
         body_lines: 4,
-        expire: None,
-        value: None,
+        timeout: None,
+        progress: None,
         theme: Theme::default(),
     }
 }

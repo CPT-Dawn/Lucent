@@ -134,9 +134,9 @@ pub struct Popup {
     /// The most lines of body to show before cutting it with an ellipsis.
     pub body_lines: u32,
     /// How long the Popup stays up once shown; `None` until closed.
-    pub expire: Option<Duration>,
+    pub timeout: Option<Duration>,
     /// Progress to show as a bar, in percent (0–100); `None` shows none.
-    pub value: Option<u8>,
+    pub progress: Option<u8>,
     /// The Theme to draw this Popup with, resolved for its Urgency.
     pub theme: Theme,
 }
@@ -205,7 +205,7 @@ pub enum Effect {
 }
 
 /// The `value` hint as a percentage, clamped to 0–100.
-fn progress(value: Option<i64>) -> Option<u8> {
+fn percent(value: Option<i64>) -> Option<u8> {
     value.map(|v| v.clamp(0, 100) as u8)
 }
 
@@ -356,7 +356,7 @@ impl Core {
         }
         self.last_id = self.last_id.wrapping_add(1).max(1);
         let id = self.last_id;
-        let expire = self.expiry(&n);
+        let timeout = self.expiry(&n);
         let theme = self.theme(&n);
         let popup = Popup {
             id,
@@ -367,8 +367,8 @@ impl Core {
             actions: shown_actions(&n.actions),
             more: 0,
             body_lines: self.config.general.body_lines,
-            expire,
-            value: progress(n.value),
+            timeout,
+            progress: percent(n.value),
             theme,
         };
         self.set_actions(id, n.actions);
@@ -378,7 +378,7 @@ impl Core {
         }
         self.stack.insert(0, popup);
         let mut effects = vec![Effect::Accepted(id), self.stack_effect()];
-        effects.extend(self.start_timer(id, expire));
+        effects.extend(self.start_timer(id, timeout));
         effects
     }
 
@@ -401,7 +401,7 @@ impl Core {
     /// returns `None` if it replaces nothing that is still live.
     fn replace(&mut self, n: &Notification) -> Option<Vec<Effect>> {
         let id = n.replaces_id;
-        let expire = self.expiry(n);
+        let timeout = self.expiry(n);
         let theme = self.theme(n);
         let update = |p: &mut Popup| {
             p.app_name.clone_from(&n.app_name);
@@ -409,8 +409,8 @@ impl Core {
             p.body = markup::clean(&n.body);
             p.image.clone_from(&n.image);
             p.actions = shown_actions(&n.actions);
-            p.expire = expire;
-            p.value = progress(n.value);
+            p.timeout = timeout;
+            p.progress = percent(n.value);
             p.theme.clone_from(&theme);
         };
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
@@ -418,7 +418,7 @@ impl Core {
             self.set_actions(id, n.actions.clone());
             // A replacement that never expires must also stop the old timer.
             let timer = self
-                .start_timer(id, expire)
+                .start_timer(id, timeout)
                 .unwrap_or(Effect::CancelTimer(id));
             return Some(vec![Effect::Accepted(id), self.stack_effect(), timer]);
         }
@@ -490,8 +490,8 @@ impl Core {
     /// Starts `id`'s timeout, or, while it is hovered, only resets what will
     /// be left once the pointer goes. A Popup that never expires (`None`) has
     /// no timeout at all.
-    fn start_timer(&mut self, id: u32, expire: Option<Duration>) -> Option<Effect> {
-        let Some(after) = expire else {
+    fn start_timer(&mut self, id: u32, timeout: Option<Duration>) -> Option<Effect> {
+        let Some(after) = timeout else {
             self.timeouts.remove(&id);
             return None;
         };
@@ -570,7 +570,7 @@ impl Core {
             let Some(popup) = self.queue.pop_front() else {
                 break;
             };
-            effects.extend(self.start_timer(popup.id, popup.expire));
+            effects.extend(self.start_timer(popup.id, popup.timeout));
             self.stack.insert(0, popup);
         }
         effects

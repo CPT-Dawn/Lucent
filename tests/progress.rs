@@ -19,7 +19,7 @@ fn shown(effects: &[Effect]) -> Option<u8> {
         .iter()
         .rev()
         .find_map(|e| match e {
-            Effect::Stack(popups) => Some(popups[0].value),
+            Effect::Stack(popups) => Some(popups[0].progress),
             _ => None,
         })
         .expect("a Notify should show a Popup")
