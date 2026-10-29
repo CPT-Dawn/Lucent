@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::theme::Theme;
 
 /// A Notification as an application asked for it, already stripped of any
 /// transport types.
@@ -19,6 +20,28 @@ pub struct Notification {
     /// The id of a live Notification this one should update in place; 0 (or
     /// any id that matches nothing) asks for a fresh one.
     pub replaces_id: u32,
+    /// Decides the Urgency style of the Popup's Theme.
+    pub urgency: Urgency,
+}
+
+/// The sender-declared importance of a Notification.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Urgency {
+    Low,
+    #[default]
+    Normal,
+    Critical,
+}
+
+impl Urgency {
+    /// The freedesktop `urgency` hint byte; unknown values count as normal.
+    pub fn from_hint(byte: u8) -> Self {
+        match byte {
+            0 => Self::Low,
+            2 => Self::Critical,
+            _ => Self::Normal,
+        }
+    }
 }
 
 /// What the renderer should show for one Notification.
@@ -31,6 +54,8 @@ pub struct Popup {
     /// Notifications waiting in the Queue, shown as a "+N more" hint. Only the
     /// last Popup of the Stack carries a non-zero count.
     pub more: usize,
+    /// The Theme to draw this Popup with, resolved for its Urgency.
+    pub theme: Theme,
 }
 
 /// Why a Notification closed, as numbered by the freedesktop spec.
@@ -131,6 +156,7 @@ impl Core {
             summary: n.summary,
             body: n.body,
             more: 0,
+            theme: self.theme(n.urgency),
         };
         if self.stack.len() >= self.max_visible {
             self.queue.push_back(popup);
@@ -151,10 +177,12 @@ impl Core {
     /// returns `None` if it replaces nothing that is still live.
     fn replace(&mut self, n: &Notification) -> Option<Vec<Effect>> {
         let id = n.replaces_id;
+        let theme = self.theme(n.urgency);
         let update = |p: &mut Popup| {
             p.app_name.clone_from(&n.app_name);
             p.summary.clone_from(&n.summary);
             p.body.clone_from(&n.body);
+            p.theme.clone_from(&theme);
         };
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
             update(popup);
@@ -216,6 +244,11 @@ impl Core {
             self.stack.insert(0, popup);
         }
         effects
+    }
+
+    /// The Theme for a Notification of `urgency`.
+    fn theme(&self, urgency: Urgency) -> Theme {
+        self.config.theme().for_urgency(urgency)
     }
 
     /// The Stack as the renderer should show it, "+N more" on the last slot.

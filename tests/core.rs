@@ -3,7 +3,8 @@
 use std::time::Duration;
 
 use lucent::config::Config;
-use lucent::core::{CloseReason, Core, Effect, Event, Notification, Popup};
+use lucent::core::{CloseReason, Core, Effect, Event, Notification, Popup, Urgency};
+use lucent::theme::Theme;
 
 fn hello() -> Notification {
     Notification {
@@ -11,6 +12,7 @@ fn hello() -> Notification {
         summary: "Hello".into(),
         body: "World".into(),
         replaces_id: 0,
+        urgency: Urgency::Normal,
     }
 }
 
@@ -32,6 +34,7 @@ fn notify_shows_a_popup_that_expires_after_the_default_timeout() {
                 summary: "Hello".into(),
                 body: "World".into(),
                 more: 0,
+                theme: Theme::default(),
             }]),
             Effect::StartTimer {
                 id,

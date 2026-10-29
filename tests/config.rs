@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use lucent::config::{Anchor, Config, General, Layout, Margin, Problem};
+use lucent::theme::ThemeOverride;
 
 fn defaults() -> Config {
     Config {
@@ -23,6 +24,7 @@ fn defaults() -> Config {
             gap: 8,
             monitor: None,
         },
+        theme: ThemeOverride::default(),
     }
 }
 
@@ -92,6 +94,7 @@ fn a_full_config_sets_every_field() {
                 gap: 12,
                 monitor: Some("HDMI-A-1".into()),
             },
+            theme: ThemeOverride::default(),
         }
     );
     assert_eq!(problems, []);
