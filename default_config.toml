@@ -134,3 +134,27 @@ left = 16
 # Low-urgency Notifications fade their text and accent to this opacity, in
 # percent, so they don't compete for attention.
 # low_opacity = 60
+
+
+# [[rule]]
+#
+# Rules change the Theme or the timeout of the Notifications they match. Each
+# matches on `app_name` (exact, ignoring case) and/or `urgency` ("low",
+# "normal" or "critical"); a Rule with neither matches everything. Matching
+# Rules apply in file order on top of [theme], so a later Rule wins. Their
+# `theme` takes any [theme] setting, `preset` included, and the urgency styles
+# are applied after it: to recolour critical Notifications, set `critical`.
+#
+# `timeout`, in milliseconds, replaces both [general] `timeout` and the app's
+# own request. Critical Notifications still never expire.
+#
+# Lucent ships with no Rules. For example:
+#
+#   [[rule]]
+#   app_name = "Spotify"
+#   timeout = 3000
+#   theme = { summary_size = 13, accent = "#1DB954" }
+#
+#   [[rule]]
+#   urgency = "critical"
+#   theme = { critical = "#FF9E64", border_width = 2 }

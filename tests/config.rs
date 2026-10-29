@@ -32,6 +32,7 @@ fn defaults() -> Config {
             monitor: None,
         },
         theme: ThemeOverride::default(),
+        rules: Vec::new(),
     }
 }
 
@@ -116,6 +117,7 @@ fn a_full_config_sets_every_field() {
                 monitor: Some("HDMI-A-1".into()),
             },
             theme: ThemeOverride::default(),
+            rules: Vec::new(),
         }
     );
     assert_eq!(problems, []);

@@ -2,9 +2,9 @@
 //! that fill it in.
 //!
 //! A Theme is resolved in layers, each overriding only the fields it sets:
-//! the chosen Preset, then the `[theme]` overrides, then the Urgency style.
-//! [`ThemeOverride`] is that "only the fields it sets" layer, so anything
-//! else that tweaks a Theme (a Rule, say) reuses it.
+//! the chosen Preset, then the `[theme]` overrides, then each matching Rule,
+//! then the Urgency style. [`ThemeOverride`] is that "only the fields it
+//! sets" layer, shared by `[theme]` and every Rule.
 //!
 //! Lucent draws no shadows or glows (ADR-0001): there are no fields for them.
 

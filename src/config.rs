@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
+use crate::core::Urgency;
 use crate::theme::{Theme, ThemeOverride};
 use crate::{debug, error};
 
@@ -29,6 +30,37 @@ pub struct Config {
     /// `[theme]`: a Preset (Midnight Bloom if unset) and any Theme field
     /// set on top of it.
     pub theme: ThemeOverride,
+    /// `[[rule]]`: per-app or per-Urgency overrides, in file order.
+    #[serde(rename = "rule")]
+    pub rules: Vec<Rule>,
+}
+
+/// `[[rule]]`: overrides for the Notifications it matches. A Rule with no
+/// matcher matches every Notification.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Rule {
+    /// Matches this app name exactly, ignoring case.
+    pub app_name: Option<String>,
+    /// Matches this Urgency.
+    pub urgency: Option<Urgency>,
+    /// How long matching Popups stay up, in milliseconds in the file. It
+    /// replaces both `[general] timeout` and the app's request; critical
+    /// Notifications still never expire.
+    #[serde(deserialize_with = "some_millis")]
+    pub timeout: Option<Duration>,
+    /// Theme fields (or a Preset) set on top of `[theme]` and earlier Rules.
+    pub theme: ThemeOverride,
+}
+
+impl Rule {
+    /// Whether this Rule applies to a Notification from `app_name` at `urgency`.
+    pub fn matches(&self, app_name: &str, urgency: Urgency) -> bool {
+        self.app_name
+            .as_ref()
+            .is_none_or(|name| name.to_lowercase() == app_name.to_lowercase())
+            && self.urgency.is_none_or(|u| u == urgency)
+    }
 }
 
 /// `[general]`
@@ -194,6 +226,31 @@ impl Config {
         theme
     }
 
+    /// The Rules matching a Notification from `app_name` at `urgency`, in
+    /// file order, so later ones win.
+    pub fn rules_for(&self, app_name: &str, urgency: Urgency) -> impl Iterator<Item = &Rule> {
+        self.rules
+            .iter()
+            .filter(move |rule| rule.matches(app_name, urgency))
+    }
+
+    /// The Theme for a Notification from `app_name` at `urgency`: `[theme]`,
+    /// then each matching Rule, then the Urgency style.
+    pub fn theme_for(&self, app_name: &str, urgency: Urgency) -> Theme {
+        let mut theme = self.theme();
+        for rule in self.rules_for(app_name, urgency) {
+            rule.theme.apply(&mut theme);
+        }
+        theme.for_urgency(urgency)
+    }
+
+    /// The timeout the last matching Rule sets, if any does.
+    pub fn rule_timeout(&self, app_name: &str, urgency: Urgency) -> Option<Duration> {
+        self.rules_for(app_name, urgency)
+            .filter_map(|rule| rule.timeout)
+            .last()
+    }
+
     /// Resolves config text against the defaults. Never fails: anything
     /// unusable is reported and the defaults stand in.
     pub fn parse(text: &str) -> (Config, Vec<Problem>) {
@@ -251,4 +308,8 @@ pub fn load() -> Config {
 
 fn millis<'de, D: Deserializer<'de>>(de: D) -> Result<Duration, D::Error> {
     u64::deserialize(de).map(Duration::from_millis)
+}
+
+fn some_millis<'de, D: Deserializer<'de>>(de: D) -> Result<Option<Duration>, D::Error> {
+    millis(de).map(Some)
 }
