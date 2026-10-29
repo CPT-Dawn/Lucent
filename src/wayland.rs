@@ -2,7 +2,8 @@
 //! the Stack the core asks for, and fills each from a `wl_shm` buffer.
 //!
 //! A Popup is drawn once per configure, never per frame; animation is the
-//! compositor's job (ADR-0001).
+//! compositor's job (ADR-0001). Where the Stack sits comes from `[layout]`:
+//! the first Popup touches the anchor and each next one sits further away.
 
 use std::error::Error;
 
@@ -22,13 +23,12 @@ use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_output, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
+use crate::config::{self, Layout};
 use crate::core::Popup;
-use crate::{debug, draw, error};
+use crate::{debug, draw, error, warn};
 
 /// The layer namespace compositor rules can target.
 const NAMESPACE: &str = "lucent";
-/// Distance from the anchor corner: top, right, bottom, left.
-const MARGIN: (i32, i32, i32, i32) = (16, 16, 0, 0);
 
 pub struct Wayland {
     registry: RegistryState,
@@ -38,6 +38,11 @@ pub struct Wayland {
     shm: Shm,
     pool: SlotPool,
     qh: QueueHandle<Wayland>,
+    layout: Layout,
+    /// Set once a missing `[layout] monitor` has been reported, so the log
+    /// says it once rather than per Popup.
+    warned_monitor: bool,
+    /// In Stack order: the first is closest to the anchor.
     surfaces: Vec<Surface>,
 }
 
@@ -52,16 +57,16 @@ impl Wayland {
     /// Connects to the compositor named by `WAYLAND_DISPLAY`. The returned
     /// source must be inserted into the event loop, dispatching into this
     /// `Wayland`.
-    pub fn connect() -> Result<(Self, WaylandSource<Wayland>), Box<dyn Error>> {
+    pub fn connect(layout: Layout) -> Result<(Self, WaylandSource<Wayland>), Box<dyn Error>> {
         let conn = Connection::connect_to_env()?;
-        let (globals, queue) = registry_queue_init::<Wayland>(&conn)?;
+        let (globals, mut queue) = registry_queue_init::<Wayland>(&conn)?;
         let qh = queue.handle();
         let compositor = CompositorState::bind(&globals, &qh)?;
         let layer_shell = LayerShell::bind(&globals, &qh)
             .map_err(|e| format!("the compositor has no layer-shell support: {e}"))?;
         let shm = Shm::bind(&globals, &qh)?;
-        let pool = SlotPool::new((draw::WIDTH * 120 * 4) as usize, &shm)?;
-        let wayland = Self {
+        let pool = SlotPool::new((layout.width.max(1) * 120 * 4) as usize, &shm)?;
+        let mut wayland = Self {
             registry: RegistryState::new(&globals),
             outputs: OutputState::new(&globals, &qh),
             compositor,
@@ -69,49 +74,106 @@ impl Wayland {
             shm,
             pool,
             qh,
+            layout,
+            warned_monitor: false,
             surfaces: Vec::new(),
         };
+        // One more roundtrip so output names are known before the first Popup.
+        queue.roundtrip(&mut wayland)?;
         Ok((wayland, WaylandSource::new(conn, queue)))
     }
 
     /// Makes the on-screen Popups match `stack`.
     pub fn show(&mut self, stack: &[Popup]) {
-        // Dropping a LayerSurface destroys it.
-        self.surfaces
-            .retain(|s| stack.iter().any(|p| p.id == s.popup.id));
+        let mut old = std::mem::take(&mut self.surfaces);
         for popup in stack {
-            if self.surfaces.iter().any(|s| s.popup.id == popup.id) {
-                continue;
+            match old.iter().position(|s| s.popup.id == popup.id) {
+                Some(index) => self.surfaces.push(old.swap_remove(index)),
+                None => {
+                    let surface = self.open(popup.clone());
+                    self.surfaces.push(surface);
+                }
             }
-            self.open(popup.clone());
+        }
+        // Dropping a LayerSurface destroys it.
+        drop(old);
+        self.restack();
+    }
+
+    /// Moves every Popup to its place: each one sits `gap` beyond the one
+    /// before it, away from the anchor edge.
+    fn restack(&mut self) {
+        let config::Margin {
+            top,
+            right,
+            bottom,
+            left,
+        } = self.layout.margin;
+        let mut offset = 0;
+        for surface in &self.surfaces {
+            let (top, bottom) = if self.layout.anchor.is_top() {
+                (top + offset, bottom)
+            } else {
+                (top, bottom + offset)
+            };
+            surface
+                .layer
+                .set_margin(px(top), px(right), px(bottom), px(left));
+            surface.layer.commit();
+            offset += surface.height + self.layout.gap;
         }
     }
 
-    fn open(&mut self, popup: Popup) {
-        let (width, height) = (draw::WIDTH, draw::measure(&popup, draw::WIDTH));
+    /// The output named by `[layout] monitor`, or `None` for the
+    /// compositor's choice (normally the focused monitor).
+    fn output(&mut self) -> Option<wl_output::WlOutput> {
+        let name = self.layout.monitor.as_deref()?;
+        let found = self.outputs.outputs().find(|o| {
+            self.outputs
+                .info(o)
+                .is_some_and(|info| info.name.as_deref() == Some(name))
+        });
+        if found.is_some() {
+            self.warned_monitor = false;
+        } else if !self.warned_monitor {
+            let known: Vec<String> = self
+                .outputs
+                .outputs()
+                .filter_map(|o| self.outputs.info(&o).and_then(|i| i.name))
+                .collect();
+            warn!(
+                "no monitor named `{name}` (have: {}); letting the compositor choose",
+                known.join(", ")
+            );
+            self.warned_monitor = true;
+        }
+        found
+    }
+
+    fn open(&mut self, popup: Popup) -> Surface {
+        let width = self.layout.width;
+        let height = draw::measure(&popup, width);
+        let output = self.output();
         let surface = self.compositor.create_surface(&self.qh);
-        // Output None: the compositor picks, normally the focused monitor.
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
             surface,
             Layer::Overlay,
             Some(NAMESPACE),
-            None,
+            output.as_ref(),
         );
-        layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
-        let (top, right, bottom, left) = MARGIN;
-        layer.set_margin(top, right, bottom, left);
+        layer.set_anchor(anchor(self.layout.anchor));
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_size(width, height);
-        // The first commit carries no buffer; drawing waits for configure.
-        layer.commit();
+        // `restack` sets the margin and makes the first commit, which
+        // carries no buffer; drawing waits for configure.
         debug!("opened popup {} ({width}x{height})", popup.id);
-        self.surfaces.push(Surface {
+        Surface {
             popup,
             layer,
             width,
             height,
-        });
+        }
     }
 
     fn draw(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
@@ -147,6 +209,24 @@ impl Wayland {
     }
 }
 
+fn anchor(anchor: config::Anchor) -> Anchor {
+    use config::Anchor as A;
+    match anchor {
+        A::TopLeft => Anchor::TOP | Anchor::LEFT,
+        // Touching only one edge centres the surface along it.
+        A::TopCenter => Anchor::TOP,
+        A::TopRight => Anchor::TOP | Anchor::RIGHT,
+        A::BottomLeft => Anchor::BOTTOM | Anchor::LEFT,
+        A::BottomCenter => Anchor::BOTTOM,
+        A::BottomRight => Anchor::BOTTOM | Anchor::RIGHT,
+    }
+}
+
+/// Layer-shell margins are `i32`; config values sit far below its limit.
+fn px(value: u32) -> i32 {
+    value.try_into().unwrap_or(i32::MAX)
+}
+
 impl LayerShellHandler for Wayland {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         debug!("compositor closed a popup surface");
@@ -165,6 +245,7 @@ impl LayerShellHandler for Wayland {
             return;
         };
         let surface = &mut self.surfaces[index];
+        let height = surface.height;
         // Zero means "pick your own size": keep ours.
         if configure.new_size.0 != 0 {
             surface.width = configure.new_size.0;
@@ -172,8 +253,12 @@ impl LayerShellHandler for Wayland {
         if configure.new_size.1 != 0 {
             surface.height = configure.new_size.1;
         }
+        let moved = surface.height != height;
         if let Err(e) = self.draw(index) {
             error!("could not draw popup: {e}");
+        }
+        if moved {
+            self.restack();
         }
     }
 }

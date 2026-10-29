@@ -13,10 +13,12 @@ const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// A private session bus, killed on drop.
+/// A private session bus, killed on drop, with its own config home so the
+/// user's real config never leaks into a test.
 struct Bus {
     daemon: Child,
     addr: String,
+    config_home: tempfile::TempDir,
 }
 
 impl Bus {
@@ -33,7 +35,15 @@ impl Bus {
         Bus {
             daemon,
             addr: addr.trim().to_owned(),
+            config_home: tempfile::tempdir().unwrap(),
         }
+    }
+
+    /// Gives Lucents started after this call `text` as their config file.
+    fn write_config(&self, text: &str) {
+        let dir = self.config_home.path().join("lucent");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), text).unwrap();
     }
 
     fn client(&self) -> Connection {
@@ -46,6 +56,7 @@ impl Bus {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_lucent"));
         cmd.env("DBUS_SESSION_BUS_ADDRESS", &self.addr)
             .env("LUCENT_NO_DRAW", "1")
+            .env("XDG_CONFIG_HOME", self.config_home.path())
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("LUCENT_LOG");
         cmd
@@ -253,4 +264,50 @@ fn logs_only_errors_by_default_and_everything_with_lucent_log_debug() {
             assert!(stderr.is_empty(), "default log should be quiet: {stderr}");
         }
     }
+}
+
+#[test]
+fn the_config_file_sets_the_timeout() {
+    let bus = Bus::new();
+    bus.write_config("[general]\ntimeout = 300\n");
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+    client
+        .add_match_no_cb(&MatchRule::new_signal(NAME, "NotificationClosed").match_str())
+        .unwrap();
+
+    let id = notify(&client, "Hello", "World");
+    let closed = closed_signals_until(&client, Instant::now(), Duration::from_millis(1500));
+
+    assert_eq!(closed.len(), 1, "{closed:?}");
+    let ((closed_id, reason), at) = closed[0];
+    assert_eq!((closed_id, reason), (id, 1));
+    assert!(
+        (Duration::from_millis(250)..Duration::from_millis(1200)).contains(&at),
+        "expired after {at:?}, configured 300 ms"
+    );
+}
+
+#[test]
+fn a_broken_config_is_logged_and_notifications_still_show() {
+    let bus = Bus::new();
+    bus.write_config("[general]\ntimeout = \"soon\"\n");
+    let client = bus.client();
+
+    let mut child = bus.lucent_command().stderr(Stdio::piped()).spawn().unwrap();
+    let start = Instant::now();
+    while !name_has_owner(&client, NAME) {
+        assert!(start.elapsed() < Duration::from_secs(5), "never served");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let id = notify(&client, "Hello", "World");
+    child.kill().unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(id > 0);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error") && stderr.contains("config.toml"),
+        "the broken file should be named in the log: {stderr}"
+    );
 }

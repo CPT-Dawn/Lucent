@@ -6,8 +6,7 @@
 
 use std::time::Duration;
 
-/// How long a Popup stays up when nothing else decides.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+use crate::config::Config;
 
 /// A Notification as an application asked for it, already stripped of any
 /// transport types.
@@ -57,13 +56,23 @@ pub enum Effect {
 
 #[derive(Debug, Default)]
 pub struct Core {
+    config: Config,
     last_id: u32,
     stack: Vec<Popup>,
 }
 
 impl Core {
+    /// A core running on the built-in defaults.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A core running on the user's resolved config.
+    pub fn with_config(config: Config) -> Self {
+        Self {
+            config,
+            ..Self::default()
+        }
     }
 
     pub fn handle(&mut self, event: Event) -> Vec<Effect> {
@@ -87,7 +96,7 @@ impl Core {
             Effect::Stack(self.stack.clone()),
             Effect::StartTimer {
                 id,
-                after: DEFAULT_TIMEOUT,
+                after: self.config.general.timeout,
             },
         ]
     }

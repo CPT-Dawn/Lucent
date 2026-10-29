@@ -22,6 +22,14 @@ macro_rules! error {
     };
 }
 
+/// Something the user set up that Lucent worked around; shown by default.
+#[macro_export]
+macro_rules! warn {
+    ($($arg:tt)*) => {
+        eprintln!("lucent: warning: {}", format_args!($($arg)*))
+    };
+}
+
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {

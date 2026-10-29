@@ -11,7 +11,6 @@ use pango::{EllipsizeMode, FontDescription, Layout, WrapMode};
 
 use crate::core::Popup;
 
-pub const WIDTH: u32 = 360;
 const PADDING: f64 = 16.0;
 const LINE_GAP: f64 = 4.0;
 const RADIUS: f64 = 20.0;

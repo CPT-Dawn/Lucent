@@ -16,6 +16,7 @@ use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 
+use crate::config::Config;
 use crate::core::{Core, Effect, Event};
 use crate::dbus::{self, DbusAdapter};
 use crate::wayland::Wayland;
@@ -53,7 +54,7 @@ impl AsFd for DbusFd {
 /// Set (to anything) to run without a compositor, as the bus tests do.
 const NO_DRAW: &str = "LUCENT_NO_DRAW";
 
-pub fn run() -> Result<Exit, Box<dyn Error>> {
+pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
     let dbus = DbusAdapter::connect()?;
     if let Err(owner) = dbus.acquire_name()? {
         error!(
@@ -82,7 +83,7 @@ pub fn run() -> Result<Exit, Box<dyn Error>> {
         debug!("{NO_DRAW} is set; drawing is off");
         None
     } else {
-        let (wayland, source) = Wayland::connect()?;
+        let (wayland, source) = Wayland::connect(config.layout.clone())?;
         handle.insert_source(source, |(), queue, app: &mut App| {
             match app.wayland.as_mut() {
                 Some(wayland) => queue.dispatch_pending(wayland),
@@ -93,7 +94,7 @@ pub fn run() -> Result<Exit, Box<dyn Error>> {
     };
 
     let mut app = App {
-        core: Core::new(),
+        core: Core::with_config(config),
         dbus,
         wayland,
         handle,

@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use lucent::config::Config;
 use lucent::core::{CloseReason, Core, Effect, Event, Notification, Popup};
 
 fn hello() -> Notification {
@@ -46,5 +47,21 @@ fn notify_shows_a_popup_that_expires_after_the_default_timeout() {
                 reason: CloseReason::Expired,
             },
         ]
+    );
+}
+
+#[test]
+fn the_configured_timeout_decides_when_a_popup_expires() {
+    let (config, _) = Config::parse("general.timeout = 1500");
+    let mut core = Core::with_config(config);
+
+    let effects = core.handle(Event::Notify(hello()));
+
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::StartTimer { after, .. } if *after == Duration::from_millis(1500)
+        )),
+        "{effects:?}"
     );
 }
