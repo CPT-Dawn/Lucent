@@ -124,12 +124,19 @@ impl Pixels {
             usize::try_from(rowstride).ok()?,
             usize::try_from(channels).ok()?,
         );
-        let valid = width > 0
-            && height > 0
-            && bits == 8
+        // The spec's fields are int32, but a sender may use any integer:
+        // anything past i32 is no real image, and every size below is then
+        // computed without overflow.
+        let limit = i32::MAX as usize;
+        if width == 0 || height == 0 || width > limit || height > limit || rowstride > limit {
+            return None;
+        }
+        let row = width.checked_mul(channels)?;
+        let needed = rowstride.checked_mul(height - 1)?.checked_add(row)?;
+        let valid = bits == 8
             && channels == if has_alpha { 4 } else { 3 }
-            && rowstride >= width * channels
-            && data.len() >= rowstride * (height - 1) + width * channels;
+            && rowstride >= row
+            && data.len() >= needed;
         if !valid {
             return None;
         }

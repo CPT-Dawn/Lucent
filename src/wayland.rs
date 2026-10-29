@@ -7,14 +7,47 @@
 //!
 //! Pointer input on a Popup becomes core [`Event`]s, collected during
 //! dispatch for the app to drain with [`Wayland::take_events`]. Popups never
-//! take keyboard focus.
+//! take keyboard focus. A press first asks the compositor for an
+//! `xdg_activation_v1` token, and its event waits for the answer, so an
+//! Action the press invokes can hand the app a token to raise its window
+//! with ([`Wayland::take_token`]).
+//!
+//! On a scaled monitor each buffer is drawn at the monitor's scale, so text
+//! stays sharp: fractional scales through `wp_fractional_scale_v1` and a
+//! `wp_viewport`, whole ones through `wl_surface.set_buffer_scale` where
+//! those are missing. Sizes everywhere else are in surface (logical) pixels.
+//!
+//! A translucent Popup asks the compositor to blur what is behind it,
+//! through `ext_background_effect_v1`, over its rounded shape. Compositors
+//! without it need a layer rule instead (see the README).
 
+use std::collections::HashMap;
 use std::error::Error;
 
 use calloop_wayland_source::WaylandSource;
-use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
+use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
+use smithay_client_toolkit::reexports::protocols::ext::background_effect::v1::client::{
+    ext_background_effect_manager_v1::{self, ExtBackgroundEffectManagerV1},
+    ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
+};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
+use smithay_client_toolkit::dispatch2::Dispatch2;
+use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
+    Shape, WpCursorShapeDeviceV1,
+};
+use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+    wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+};
+use smithay_client_toolkit::reexports::protocols::xdg::activation::v1::client::{
+    xdg_activation_token_v1::{self, XdgActivationTokenV1},
+    xdg_activation_v1::XdgActivationV1,
+};
+use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
+    wp_viewport::WpViewport, wp_viewporter::WpViewporter,
+};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::pointer::cursor_shape::CursorShapeManager;
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
@@ -27,7 +60,7 @@ use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
-use wayland_client::{Connection, QueueHandle};
+use wayland_client::{Connection, Proxy, QueueHandle};
 
 use crate::config::{self, Layout};
 use crate::core::{Button, Event, Popup};
@@ -37,11 +70,34 @@ use crate::{debug, draw, error};
 /// The layer namespace compositor rules can target.
 const NAMESPACE: &str = "lucent";
 
+/// Scales are kept in 120ths, as `wp_fractional_scale_v1` sends them.
+pub const UNSCALED: u32 = 120;
+
 pub struct Wayland {
     registry: RegistryState,
     outputs: OutputState,
     seats: SeatState,
     pointer: Option<wl_pointer::WlPointer>,
+    /// The seat the pointer belongs to, which activation tokens name.
+    seat: Option<wl_seat::WlSeat>,
+    activation: Option<XdgActivationV1>,
+    /// Presses waiting for their activation token, oldest first.
+    pressing: Vec<(XdgActivationTokenV1, Event)>,
+    /// Tokens for the presses in `events`, by Popup id.
+    tokens: HashMap<u32, String>,
+    /// Sets the arrow over Popups, where the compositor offers it; without
+    /// it the pointer keeps whatever image it had.
+    cursor_shapes: Option<CursorShapeManager>,
+    cursor: Option<WpCursorShapeDeviceV1>,
+    /// Both present, or neither: fractional scaling needs the two together.
+    fractional: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
+    /// The scale (in 120ths) the compositor last asked a Popup for: new
+    /// Popups are measured and drawn at it, so the usual case needs no
+    /// second pass once the compositor confirms it.
+    scale_hint: u32,
+    /// Requests blur behind translucent Popups. Kept only once the
+    /// compositor says it can blur.
+    blur: Option<ExtBackgroundEffectManagerV1>,
     /// Pointer input waiting for the app, oldest first.
     events: Vec<Event>,
     compositor: CompositorState,
@@ -59,9 +115,22 @@ pub struct Wayland {
 
 struct Surface {
     popup: Popup,
-    /// The Popup's image, loaded once at the icon size; dropped with it.
+    /// The Popup's image, loaded once at the icon size and scale; dropped
+    /// with it.
     icon: Option<cairo::ImageSurface>,
     layer: LayerSurface,
+    /// The scale buffers are drawn at, in 120ths: 120 until the compositor
+    /// says otherwise.
+    scale: u32,
+    /// Present with fractional scaling: maps the scaled buffer back onto
+    /// the surface size.
+    viewport: Option<WpViewport>,
+    fractional: Option<WpFractionalScaleV1>,
+    /// Present when the compositor blurs behind surfaces.
+    effect: Option<ExtBackgroundEffectSurfaceV1>,
+    /// The size and corner radius the blur region was last set for, so it
+    /// is sent again only when one changes; `None` while none is set.
+    blurred: Option<(u32, u32, u32)>,
     width: u32,
     height: u32,
     /// Distance from the anchor edge, including the outer margin.
@@ -74,11 +143,49 @@ struct Surface {
     hovered: Option<usize>,
 }
 
+impl Drop for Surface {
+    fn drop(&mut self) {
+        // wayland-rs never destroys a protocol object on its own; these
+        // must go before the layer surface (dropped next) destroys theirs.
+        if let Some(viewport) = self.viewport.take() {
+            viewport.destroy();
+        }
+        if let Some(fractional) = self.fractional.take() {
+            fractional.destroy();
+        }
+        if let Some(effect) = self.effect.take() {
+            effect.destroy();
+        }
+    }
+}
+
+/// `logical` surface pixels at `scale` (in 120ths), rounded half away from
+/// zero as `wp_fractional_scale_v1` asks.
+fn scaled(logical: u32, scale: u32) -> u32 {
+    let pixels = (u64::from(logical) * u64::from(scale) + u64::from(UNSCALED / 2)) / 120;
+    u32::try_from(pixels).unwrap_or(u32::MAX)
+}
+
+/// A scale in 120ths, as a factor.
+fn to_f64(scale: u32) -> f64 {
+    f64::from(scale) / f64::from(UNSCALED)
+}
+
+/// User data for the protocol objects Lucent binds itself, rather than
+/// through a toolkit helper.
+struct Extension;
+
 impl Wayland {
     /// Connects to the compositor named by `WAYLAND_DISPLAY`. The returned
     /// source must be inserted into the event loop, dispatching into this
     /// `Wayland`.
-    pub fn connect(layout: Layout) -> Result<(Self, WaylandSource<Wayland>), Box<dyn Error>> {
+    ///
+    /// `scale_hint` is the scale, in 120ths, a Popup was last drawn at
+    /// (see [`Self::scale_hint`]), or [`UNSCALED`] if unknown.
+    pub fn connect(
+        layout: Layout,
+        scale_hint: u32,
+    ) -> Result<(Self, WaylandSource<Wayland>), Box<dyn Error>> {
         let conn = Connection::connect_to_env()?;
         let (globals, mut queue) = registry_queue_init::<Wayland>(&conn)?;
         let qh = queue.handle();
@@ -87,11 +194,24 @@ impl Wayland {
             .map_err(|e| format!("the compositor has no layer-shell support: {e}"))?;
         let shm = Shm::bind(&globals, &qh)?;
         let pool = SlotPool::new((layout.width.max(1) * 120 * 4) as usize, &shm)?;
+        let fractional = globals
+            .bind(&qh, 1..=1, Extension)
+            .and_then(|manager| Ok((manager, globals.bind(&qh, 1..=1, Extension)?)))
+            .ok();
         let mut wayland = Self {
             registry: RegistryState::new(&globals),
             outputs: OutputState::new(&globals, &qh),
             seats: SeatState::new(&globals, &qh),
             pointer: None,
+            seat: None,
+            activation: globals.bind(&qh, 1..=1, Extension).ok(),
+            pressing: Vec::new(),
+            tokens: HashMap::new(),
+            cursor_shapes: CursorShapeManager::bind(&globals, &qh).ok(),
+            cursor: None,
+            scale_hint: UNSCALED,
+            fractional,
+            blur: globals.bind(&qh, 1..=1, Extension).ok(),
             events: Vec::new(),
             compositor,
             layer_shell,
@@ -102,8 +222,15 @@ impl Wayland {
             reported_monitor: false,
             surfaces: Vec::new(),
         };
-        // One more roundtrip so output names are known before the first Popup.
+        // One more roundtrip so output names, and whether the compositor
+        // can blur, are known before the first Popup.
         queue.roundtrip(&mut wayland)?;
+        // A fractional hint is only usable through a viewport. Clamp first,
+        // so a stale 0 can't pass as a whole scale.
+        let scale_hint = scale_hint.clamp(UNSCALED / 2, 10 * UNSCALED);
+        if wayland.fractional.is_some() || scale_hint.is_multiple_of(UNSCALED) {
+            wayland.scale_hint = scale_hint;
+        }
         Ok((wayland, WaylandSource::new(conn, queue)))
     }
 
@@ -130,9 +257,26 @@ impl Wayland {
         }
     }
 
+    /// The scale, in 120ths, the compositor last asked a Popup to be drawn
+    /// at, for the next Lucent to start from.
+    pub fn scale_hint(&self) -> u32 {
+        self.scale_hint
+    }
+
     /// Pointer input on Popups since the last call, as core events.
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
+    }
+
+    /// The activation token for the press on Popup `id` among the events
+    /// last taken, if the compositor gave one. Taken once.
+    pub fn take_token(&mut self, id: u32) -> Option<String> {
+        self.tokens.remove(&id)
+    }
+
+    /// Drops the tokens no Action used: a press that only dismissed.
+    pub fn forget_tokens(&mut self) {
+        self.tokens.clear();
     }
 
     /// The margin on the edge the Stack grows from.
@@ -186,13 +330,14 @@ impl Wayland {
                         &surface.popup.theme.icon_theme,
                     )
             {
-                surface.icon = load_icon(popup);
+                surface.icon = load_icon(popup, surface.scale);
             }
             surface.popup = popup.clone();
             // The Actions may have moved; the next motion finds the right one.
             surface.hovered = None;
-            surface.action_rects = draw::action_rects(popup, surface.icon.as_ref(), surface.width);
-            let height = draw::measure(popup, surface.icon.as_ref(), surface.width);
+            let (icon, scale) = (surface.icon.as_ref(), to_f64(surface.scale));
+            surface.action_rects = draw::action_rects_at(popup, icon, surface.width, scale);
+            let height = draw::measure_at(popup, icon, surface.width, scale);
             if height != surface.height {
                 // The configure answering this commit redraws at the new size.
                 surface.height = height;
@@ -219,10 +364,22 @@ impl Wayland {
 
     fn open(&mut self, popup: Popup, offset: i32) -> Surface {
         let width = self.layout.width;
-        let icon = load_icon(&popup);
-        let height = draw::measure(&popup, icon.as_ref(), width);
+        let scale = self.scale_hint;
+        let icon = load_icon(&popup, scale);
+        let height = draw::measure_at(&popup, icon.as_ref(), width, to_f64(scale));
         let output = self.output();
         let surface = self.compositor.create_surface(&self.qh);
+        let (viewport, fractional) = match &self.fractional {
+            Some((manager, viewporter)) => (
+                Some(viewporter.get_viewport(&surface, &self.qh, Extension)),
+                Some(manager.get_fractional_scale(&surface, &self.qh, Extension)),
+            ),
+            None => (None, None),
+        };
+        let effect = self
+            .blur
+            .as_ref()
+            .map(|blur| blur.get_background_effect(&surface, &self.qh, Extension));
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
             surface,
@@ -238,10 +395,15 @@ impl Wayland {
         layer.commit();
         debug!("opened popup {} ({width}x{height})", popup.id);
         Surface {
-            action_rects: draw::action_rects(&popup, icon.as_ref(), width),
+            action_rects: draw::action_rects_at(&popup, icon.as_ref(), width, to_f64(scale)),
             popup,
             icon,
             layer,
+            scale,
+            viewport,
+            fractional,
+            effect,
+            blurred: None,
             width,
             height,
             offset,
@@ -251,9 +413,14 @@ impl Wayland {
     }
 
     fn draw(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
+        self.set_blur(index);
         let surface = &self.surfaces[index];
-        let (w, h) = (surface.width as i32, surface.height as i32);
-        let stride = cairo::Format::ARgb32.stride_for_width(surface.width)?;
+        let (bw, bh) = (
+            scaled(surface.width, surface.scale),
+            scaled(surface.height, surface.scale),
+        );
+        let (w, h) = (i32::try_from(bw)?, i32::try_from(bh)?);
+        let stride = cairo::Format::ARgb32.stride_for_width(bw)?;
         let (buffer, canvas) = self
             .pool
             .create_buffer(w, h, stride, wl_shm::Format::Argb8888)?;
@@ -270,6 +437,10 @@ impl Wayland {
                 stride,
             )?;
             let cr = cairo::Context::new(&target)?;
+            cr.scale(
+                f64::from(bw) / f64::from(surface.width.max(1)),
+                f64::from(bh) / f64::from(surface.height.max(1)),
+            );
             let painted = draw::paint(
                 &cr,
                 &surface.popup,
@@ -283,6 +454,14 @@ impl Wayland {
             painted?;
         }
         let wl_surface = surface.layer.wl_surface();
+        match &surface.viewport {
+            Some(viewport) => {
+                let size = |v: u32| i32::try_from(v).unwrap_or(i32::MAX);
+                viewport.set_destination(size(surface.width), size(surface.height));
+            }
+            // Only whole scales get here; 0 must never be sent.
+            None => wl_surface.set_buffer_scale((surface.scale / UNSCALED).max(1) as i32),
+        }
         wl_surface.damage_buffer(0, 0, w, h);
         buffer.attach_to(wl_surface)?;
         surface.layer.commit();
@@ -290,10 +469,66 @@ impl Wayland {
     }
 }
 
-/// The Popup's image at its Theme's icon size, if it has one that loads.
-fn load_icon(popup: &Popup) -> Option<cairo::ImageSurface> {
+impl Wayland {
+    /// Blurs behind the Popup at `index`, over its rounded shape, while its
+    /// background lets anything show through. Takes effect on the next
+    /// commit.
+    fn set_blur(&mut self, index: usize) {
+        let surface = &mut self.surfaces[index];
+        let Some(effect) = &surface.effect else {
+            return;
+        };
+        let theme = &surface.popup.theme;
+        let wanted =
+            (theme.background.a < 255).then_some((surface.width, surface.height, theme.radius));
+        if wanted == surface.blurred {
+            return;
+        }
+        surface.blurred = wanted;
+        let Some((w, h, radius)) = wanted else {
+            effect.set_blur_region(None);
+            return;
+        };
+        match Region::new(&self.compositor) {
+            Ok(region) => {
+                for (x, y, width, height) in rounded_region(w, h, radius) {
+                    region.add(x, y, width, height);
+                }
+                // The region is copied; dropping it here is fine.
+                effect.set_blur_region(Some(region.wl_region()));
+            }
+            Err(e) => error!("could not blur behind a popup: {e}"),
+        }
+    }
+}
+
+/// A `w`×`h` rectangle with corners of `radius`, as the rectangles a
+/// `wl_region` is built from: one row per pixel of each corner's height,
+/// inset to follow the arc, and one rectangle for the straight middle.
+pub fn rounded_region(w: u32, h: u32, radius: u32) -> Vec<(i32, i32, i32, i32)> {
+    let side = |v: u32| i32::try_from(v).unwrap_or(i32::MAX);
+    let (w, h) = (side(w), side(h));
+    let r = side(radius).min(w / 2).min(h / 2).max(0);
+    let mut rects = Vec::with_capacity(2 * r as usize + 1);
+    for y in 0..r {
+        let dy = f64::from(r - y) - 0.5;
+        let inset = (f64::from(r) - (f64::from(r * r) - dy * dy).max(0.0).sqrt()).round() as i32;
+        rects.push((inset, y, w - 2 * inset, 1));
+        rects.push((inset, h - 1 - y, w - 2 * inset, 1));
+    }
+    if h > 2 * r {
+        rects.push((0, r, w, h - 2 * r));
+    }
+    rects
+}
+
+/// The Popup's image at its Theme's icon size and `scale` (in 120ths), if
+/// it has one that loads.
+fn load_icon(popup: &Popup, scale: u32) -> Option<cairo::ImageSurface> {
     let image = popup.image.as_ref()?;
-    Icons::new(popup.theme.icon_size, &popup.theme.icon_theme).load(image)
+    Icons::new(popup.theme.icon_size, &popup.theme.icon_theme)
+        .with_scale(to_f64(scale))
+        .load(image)
 }
 
 fn anchor(anchor: config::Anchor) -> Anchor {
@@ -332,9 +567,27 @@ fn px(value: u32) -> i32 {
 }
 
 impl LayerShellHandler for Wayland {
+    /// The compositor took a Popup's surface away, as it does when its
+    /// monitor goes. The Notification is still live, so it is shown again
+    /// where the compositor now chooses, unless the surface never got as
+    /// far as its first configure: then the compositor refused it outright,
+    /// and asking again would only loop.
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
-        debug!("compositor closed a popup surface");
-        self.surfaces.retain(|s| &s.layer != layer);
+        let Some(index) = self.surfaces.iter().position(|s| &s.layer == layer) else {
+            return;
+        };
+        let stack: Vec<Popup> = self.surfaces.iter().map(|s| s.popup.clone()).collect();
+        let closed = self.surfaces.remove(index);
+        let (id, shown) = (closed.popup.id, closed.configured);
+        drop(closed);
+        // Its Leave may never come now; a paused timeout must run again.
+        self.events.push(Event::HoverEnd(id));
+        if shown {
+            debug!("compositor closed popup {id}; showing it again");
+            self.show(&stack);
+        } else {
+            error!("the compositor refused popup {id}");
+        }
     }
 
     fn configure(
@@ -353,8 +606,12 @@ impl LayerShellHandler for Wayland {
         // Zero means "pick your own size": keep ours.
         if configure.new_size.0 != 0 && configure.new_size.0 != surface.width {
             surface.width = configure.new_size.0;
-            surface.action_rects =
-                draw::action_rects(&surface.popup, surface.icon.as_ref(), surface.width);
+            surface.action_rects = draw::action_rects_at(
+                &surface.popup,
+                surface.icon.as_ref(),
+                surface.width,
+                to_f64(surface.scale),
+            );
         }
         if configure.new_size.1 != 0 {
             surface.height = configure.new_size.1;
@@ -365,14 +622,50 @@ impl LayerShellHandler for Wayland {
     }
 }
 
+impl Wayland {
+    /// Redraws the Popup on `surface` at `scale` (in 120ths), if that is
+    /// new: its icon is reloaded to match, while its size, in surface
+    /// pixels, stays the same.
+    fn rescale(&mut self, surface: &wl_surface::WlSurface, scale: u32) {
+        let Some(index) = self
+            .surfaces
+            .iter()
+            .position(|s| s.layer.wl_surface() == surface)
+        else {
+            return;
+        };
+        if scale == 0 {
+            return;
+        }
+        self.scale_hint = scale;
+        let target = &mut self.surfaces[index];
+        if target.scale == scale {
+            return;
+        }
+        debug!("popup {} now drawn at scale {scale}/120", target.popup.id);
+        target.scale = scale;
+        target.icon = load_icon(&target.popup, scale);
+        if target.configured
+            && let Err(e) = self.draw(index)
+        {
+            error!("could not redraw popup: {e}");
+        }
+    }
+}
+
 impl CompositorHandler for Wayland {
+    /// The whole-number scale, used only where fractional scaling is missing.
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: i32,
+        surface: &wl_surface::WlSurface,
+        factor: i32,
     ) {
+        if self.fractional.is_none() {
+            let factor = u32::try_from(factor).unwrap_or(1);
+            self.rescale(surface, factor.saturating_mul(UNSCALED));
+        }
     }
 
     fn transform_changed(
@@ -434,7 +727,14 @@ impl SeatHandler for Wayland {
     ) {
         if capability == Capability::Pointer && self.pointer.is_none() {
             match self.seats.get_pointer(qh, &seat) {
-                Ok(pointer) => self.pointer = Some(pointer),
+                Ok(pointer) => {
+                    self.cursor = self
+                        .cursor_shapes
+                        .as_ref()
+                        .map(|shapes| shapes.get_shape_device(&pointer, qh));
+                    self.pointer = Some(pointer);
+                    self.seat = Some(seat);
+                }
                 Err(e) => error!("could not use the pointer: {e}"),
             }
         }
@@ -450,7 +750,11 @@ impl SeatHandler for Wayland {
         if capability == Capability::Pointer
             && let Some(pointer) = self.pointer.take()
         {
+            if let Some(cursor) = self.cursor.take() {
+                cursor.destroy();
+            }
             pointer.release();
+            self.seat = None;
         }
     }
 
@@ -476,7 +780,10 @@ impl PointerHandler for Wayland {
             let (x, y) = event.position;
             let id = self.surfaces[index].popup.id;
             let event = match event.kind {
-                PointerEventKind::Enter { .. } => {
+                PointerEventKind::Enter { serial } => {
+                    if let Some(cursor) = &self.cursor {
+                        cursor.set_shape(serial, Shape::Default);
+                    }
                     self.hover_action(index, x, y);
                     Event::HoverStart(id)
                 }
@@ -488,7 +795,11 @@ impl PointerHandler for Wayland {
                     self.hover_action(index, x, y);
                     continue;
                 }
-                PointerEventKind::Press { button: code, .. } => {
+                PointerEventKind::Press {
+                    button: code,
+                    serial,
+                    ..
+                } => {
                     let Some(button) = Button::from_code(code) else {
                         continue;
                     };
@@ -497,13 +808,22 @@ impl PointerHandler for Wayland {
                     let action = (button == Button::Left)
                         .then(|| surface.action_rects.iter().position(|r| r.contains(x, y)))
                         .flatten();
-                    match action {
+                    let event = match action {
                         Some(at) => Event::InvokeAction {
                             id,
                             key: surface.popup.actions[at].key.clone(),
                         },
                         None => Event::Click { id, button },
+                    };
+                    if let (Some(activation), Some(seat)) = (&self.activation, &self.seat) {
+                        let token = activation.get_activation_token(&self.qh, Extension);
+                        token.set_serial(serial, seat);
+                        token.set_surface(surface.layer.wl_surface());
+                        token.commit();
+                        self.pressing.push((token, event));
+                        continue;
                     }
+                    event
                 }
                 _ => continue,
             };
@@ -549,6 +869,99 @@ impl ProvidesRegistryState for Wayland {
         &mut self.registry
     }
     registry_handlers![OutputState, SeatState];
+}
+
+impl Dispatch2<WpFractionalScaleV1, Wayland> for Extension {
+    fn event(
+        &self,
+        state: &mut Wayland,
+        proxy: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        _: &Connection,
+        _: &QueueHandle<Wayland>,
+    ) {
+        let wp_fractional_scale_v1::Event::PreferredScale { scale } = event else {
+            return;
+        };
+        let surface = state
+            .surfaces
+            .iter()
+            .find(|s| s.fractional.as_ref() == Some(proxy))
+            .map(|s| s.layer.wl_surface().clone());
+        if let Some(surface) = surface {
+            state.rescale(&surface, scale);
+        }
+    }
+}
+
+/// The objects below send no events.
+macro_rules! no_events {
+    ($($interface:ty),*) => {$(
+        impl Dispatch2<$interface, Wayland> for Extension {
+            fn event(
+                &self,
+                _: &mut Wayland,
+                _: &$interface,
+                _: <$interface as Proxy>::Event,
+                _: &Connection,
+                _: &QueueHandle<Wayland>,
+            ) {
+            }
+        }
+    )*};
+}
+impl Dispatch2<XdgActivationTokenV1, Wayland> for Extension {
+    fn event(
+        &self,
+        state: &mut Wayland,
+        proxy: &XdgActivationTokenV1,
+        event: xdg_activation_token_v1::Event,
+        _: &Connection,
+        _: &QueueHandle<Wayland>,
+    ) {
+        let xdg_activation_token_v1::Event::Done { token } = event else {
+            return;
+        };
+        proxy.destroy();
+        let Some(at) = state.pressing.iter().position(|(t, _)| t == proxy) else {
+            return;
+        };
+        let (_, press) = state.pressing.remove(at);
+        if let Event::Click { id, .. } | Event::InvokeAction { id, .. } = press {
+            state.tokens.insert(id, token);
+        }
+        state.events.push(press);
+    }
+}
+
+no_events!(
+    XdgActivationV1,
+    WpFractionalScaleManagerV1,
+    WpViewporter,
+    WpViewport,
+    ExtBackgroundEffectSurfaceV1
+);
+
+impl Dispatch2<ExtBackgroundEffectManagerV1, Wayland> for Extension {
+    fn event(
+        &self,
+        state: &mut Wayland,
+        _: &ExtBackgroundEffectManagerV1,
+        event: ext_background_effect_manager_v1::Event,
+        _: &Connection,
+        _: &QueueHandle<Wayland>,
+    ) {
+        let ext_background_effect_manager_v1::Event::Capabilities { flags } = event else {
+            return;
+        };
+        let can_blur = flags
+            .into_result()
+            .is_ok_and(|f| f.contains(ext_background_effect_manager_v1::Capability::Blur));
+        if !can_blur && let Some(blur) = state.blur.take() {
+            debug!("the compositor cannot blur; leaving it to layer rules");
+            blur.destroy();
+        }
+    }
 }
 
 delegate_registry!(Wayland);

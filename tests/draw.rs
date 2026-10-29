@@ -48,7 +48,7 @@ fn a_popup_grows_to_fit_an_icon_taller_than_its_text() {
     let with_icon = draw::measure(&popup(&[]), Some(&icon), 360);
 
     assert!(plain < 96, "one short line should be shorter than the icon");
-    assert!(with_icon >= 96 + 2 * 16, "{with_icon} leaves no room");
+    assert!(with_icon >= 96 + 2 * 14, "{with_icon} leaves no room");
 }
 
 #[test]
@@ -66,9 +66,9 @@ fn the_icon_is_painted_at_the_top_left_inside_the_padding() {
     let pixel = |x: usize, y: usize| {
         u32::from_ne_bytes(data[y * stride + x * 4..][..4].try_into().unwrap())
     };
-    assert_eq!(pixel(16 + 24, 16 + 24), 0xFFFF_0000, "icon centre");
+    assert_eq!(pixel(14 + 24, 14 + 24), 0xFFFF_0000, "icon centre");
     assert_ne!(
-        pixel(16 + 48 + 2, 16 + 24),
+        pixel(14 + 48 + 2, 14 + 24),
         0xFFFF_0000,
         "right of the icon"
     );
@@ -136,4 +136,25 @@ fn buttons_sit_below_an_icon_taller_than_the_text() {
 
     assert!(buttons[0].y >= 16.0 + 96.0, "{buttons:?}");
     assert!(f64::from(draw::measure(&p, Some(&icon), WIDTH)) >= buttons[0].y + buttons[0].height);
+}
+
+#[test]
+fn a_popup_measures_the_same_at_every_scale() {
+    let mut long = popup(&["Open", "Snooze"]);
+    long.body = "A body long enough to wrap onto a second and maybe a third line, \
+                 to catch any width that rounds differently once scaled."
+        .into();
+    let at_1 = draw::measure(&long, None, WIDTH);
+    for scale in [1.25, 1.5, 5.0 / 3.0, 2.0] {
+        assert_eq!(
+            draw::measure_at(&long, None, WIDTH, scale),
+            at_1,
+            "at {scale}"
+        );
+        assert_eq!(
+            draw::action_rects_at(&long, None, WIDTH, scale),
+            draw::action_rects(&long, None, WIDTH),
+            "at {scale}"
+        );
+    }
 }

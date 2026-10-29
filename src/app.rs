@@ -4,8 +4,9 @@
 //! D-Bus fd, the Wayland connection and the expiry timers are all sources on
 //! this one loop, which blocks until one of them is ready.
 //!
-//! Pango starts its own idle `[pango] fontconfig` helper thread the first
-//! time it lays out text, and offers no way to disable it. That thread is
+//! Pango starts its own idle `[pango] fontconfig` helper thread when its
+//! font map is first made (at start-up under Idle exit, else for the first
+//! Popup), and offers no way to disable it. That thread is
 //! Pango's, not Lucent's; with drawing off (`LUCENT_NO_DRAW`) it never starts.
 
 use std::collections::HashMap;
@@ -20,7 +21,7 @@ use crate::config::Config;
 use crate::core::{Core, Effect, Event};
 use crate::dbus::{self, DbusAdapter};
 use crate::ids::IdStore;
-use crate::wayland::Wayland;
+use crate::wayland::{self, Wayland};
 use crate::{debug, error};
 
 /// What the process should do once [`run`] returns.
@@ -61,6 +62,14 @@ const NO_DRAW: &str = "LUCENT_NO_DRAW";
 
 pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
     let no_draw = std::env::var_os(NO_DRAW).is_some();
+    // A Lucent started by Idle exit is about to draw a Popup. Creating
+    // Pango's font map now sends fontconfig's start-up (its config parse
+    // and font list, the bulk of a cold start) to Pango's own thread, where
+    // it overlaps the D-Bus and Wayland setup below. A resident Lucent
+    // skips it, so an idle one stays as small as before.
+    if !no_draw && config.general.idle_exit {
+        let _ = pangocairo::FontMap::default();
+    }
     let mut dbus = DbusAdapter::connect()?;
     // No pointer without a compositor: let the bus tests click instead.
     #[cfg(feature = "test-hooks")]
@@ -90,11 +99,13 @@ pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
         },
     )?;
 
+    let ids = IdStore::open();
     let wayland = if no_draw {
         debug!("{NO_DRAW} is set; drawing is off");
         None
     } else {
-        let (wayland, source) = Wayland::connect(config.layout.clone())?;
+        let scale = ids.load_scale().unwrap_or(wayland::UNSCALED);
+        let (wayland, source) = Wayland::connect(config.layout.clone(), scale)?;
         handle.insert_source(source, |(), queue, app: &mut App| {
             let Some(wayland) = app.wayland.as_mut() else {
                 return Ok(0);
@@ -104,12 +115,14 @@ pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
                 let effects = app.core.handle(event);
                 app.apply(effects);
             }
+            if let Some(wayland) = app.wayland.as_mut() {
+                wayland.forget_tokens();
+            }
             Ok(dispatched)
         })?;
         Some(wayland)
     };
 
-    let ids = IdStore::open();
     let saved_id = ids.load();
     let mut app = App {
         core: Core::with_config(config).resuming_after(saved_id),
@@ -188,6 +201,9 @@ impl App {
         match released {
             Ok(()) => {
                 debug!("idle; exiting");
+                if let Some(wayland) = &self.wayland {
+                    self.ids.save_scale(wayland.scale_hint());
+                }
                 self.exit = true;
             }
             // Still the owner, so anything late was shown here: stay, and
@@ -257,7 +273,14 @@ impl App {
                     }
                 }
                 Effect::Exit => self.idle_exit(),
-                Effect::ActionInvoked { id, key } => self.dbus.emit_action_invoked(id, &key),
+                Effect::ActionInvoked { id, key } => {
+                    // Lets the app raise its window: Wayland allows that
+                    // only with a token from the input that asked for it.
+                    if let Some(token) = self.wayland.as_mut().and_then(|w| w.take_token(id)) {
+                        self.dbus.emit_activation_token(id, &token);
+                    }
+                    self.dbus.emit_action_invoked(id, &key);
+                }
             }
         }
     }

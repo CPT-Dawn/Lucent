@@ -1,4 +1,5 @@
-//! Remembers the last Notification id across Idle exits (ADR-0002).
+//! Remembers the last Notification id across Idle exits (ADR-0002), and
+//! beside it the scale Popups were last drawn at, which only saves work.
 //!
 //! A restarted Lucent must not hand out ids from 1 again, or a client holding
 //! an old id could replace or close an unrelated Notification. The id lives
@@ -46,14 +47,38 @@ impl IdStore {
     /// and renamed, so a crash never leaves a torn number behind.
     pub fn save(&self, id: u32) {
         let Some(path) = &self.path else { return };
-        let tmp = path.with_extension("tmp");
-        let result = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&tmp, id.to_string()))
-            .and_then(|()| std::fs::rename(&tmp, path));
-        if let Err(e) = result {
-            error!("could not save the last id to {}: {e}", path.display());
+        write_number(path, id);
+    }
+
+    /// The scale, in 120ths, the last run drew Popups at, if it said.
+    pub fn load_scale(&self) -> Option<u32> {
+        let text = std::fs::read_to_string(self.scale_path()?).ok()?;
+        text.trim().parse().ok()
+    }
+
+    /// Records the scale Popups were last drawn at; a guess the next run
+    /// starts from, so a failure is only logged.
+    pub fn save_scale(&self, scale: u32) {
+        if let Some(path) = self.scale_path() {
+            write_number(&path, scale);
         }
+    }
+
+    fn scale_path(&self) -> Option<PathBuf> {
+        Some(self.path.as_ref()?.with_file_name("scale"))
+    }
+}
+
+/// Writes `value` to `path` through a temporary file and a rename, creating
+/// the directory if need be.
+fn write_number(path: &std::path::Path, value: u32) {
+    let tmp = path.with_extension("tmp");
+    let result = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&tmp, value.to_string()))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(e) = result {
+        error!("could not save {}: {e}", path.display());
     }
 }

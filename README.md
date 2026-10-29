@@ -18,8 +18,10 @@
   compositor about 7 ms after `notify-send` while Lucent is up, and about
   28 ms when it has to start first. Each Popup is drawn once and redrawn only
   when its content or hover state changes.
-- **Good-looking by default.** *Midnight Bloom* is smoked glass with mint
-  accents, made for compositor blur and still readable without it. Two more
+- **Good-looking by default.** *Midnight Bloom* is smoked glass with a touch
+  of mint, made for compositor blur and still readable without it. Blur is
+  requested for you where the compositor supports it, and text is drawn at
+  your monitor's scale, fractional ones included, so it stays sharp. Two more
   Presets, `light` and `opaque`, are one line away.
 
 <table>
@@ -33,28 +35,28 @@
   </tr>
 </table>
 
-<sub>Captured with <code>grim</code> on Hyprland 0.57 using the layer rule from
-<a href="#blur-and-animation">Blur and animation</a>, over a test pattern.
-The Popups are the <code>notify-send</code> commands from
-<a href="#usage">Usage</a>, with Breeze icons.</sub>
+<sub>Captured with <code>grim</code> on Hyprland 0.57 over a test pattern,
+with the blur Lucent asks for itself and no layer rule. The Popups are the
+<code>notify-send</code> commands from <a href="#usage">Usage</a>, with Breeze
+icons (Breeze Dark on the dark Presets).</sub>
 
 ## Benchmark
 
-Measured on 2026-10-29: Intel Core i7-13700HX, 31 GiB RAM, Linux
+Measured on 2026-10-30: Intel Core i7-13700HX, 31 GiB RAM, Linux
 7.2.11-arch1-1, Hyprland 0.57.0, with `bench/benchmark.py --runs 10
 --idle-seconds 60`. Latencies are medians.
 
 | Daemon | Version | Binary size | Idle RSS | Idle wakeups | Peak RSS, 5 Popups | PSS, 5 Popups | Cold start | Warm |
 |---|---|--:|--:|--:|--:|--:|--:|--:|
-| **lucent** | 1.1.0 (be7e4e3)[^ver] | 1.8 MiB | **0 (not running)** | **0** | 24.5 MiB | 9.6 MiB | 28.0 ms | 6.7 ms |
-| lucent (resident) | 1.1.0 (be7e4e3)[^ver] | 1.8 MiB | 9.1 MiB | 0 | 24.4 MiB | 9.6 MiB | 31.1 ms | 6.8 ms |
-| mako | 1.11.0-1 | 91 KiB | 8.7 MiB | 0 | 22.9 MiB | 8.0 MiB | 25.7 ms | 6.1 ms |
-| dunst | 1.13.2-3 | 207 KiB | 11.1 MiB | 63 | 30.5 MiB | 11.2 MiB | 14.8 ms[^dunst] | 9.8 ms |
-| swaync | 0.12.6-1 | 615 KiB | 47.1 MiB | 0 | 307.4 MiB | 220.8 MiB | 231.2 ms | 43.5 ms |
-| fnott | 1.8.0-1 | 187 KiB | 14.6 MiB | 0 | 20.6 MiB | 7.4 MiB | 31.3 ms | 5.8 ms |
+| **lucent** | 2.0.1 | 1.9 MiB[^size] | **0 (not running)** | **0** | 24.4 MiB | 9.4 MiB | 27.9 ms | 7.3 ms |
+| lucent (resident) | 2.0.1 | 1.9 MiB[^size] | 9.3 MiB | 0 | 24.6 MiB | 9.4 MiB | 30.5 ms | 6.7 ms |
+| mako | 1.11.0-1 | 91 KiB | 8.8 MiB | 0 | 22.9 MiB | 7.7 MiB | 28.1 ms | 5.8 ms |
+| dunst | 1.13.2-3 | 207 KiB | 10.9 MiB | 0 | 30.0 MiB | 10.7 MiB | 14.3 ms[^dunst] | 9.3 ms |
+| swaync | 0.12.6-1 | 615 KiB | 47.2 MiB | 0 | 309.1 MiB | 154.1 MiB | 226.4 ms | 40.0 ms |
+| fnott | 1.8.0-1 | 187 KiB | 14.6 MiB | 0 | 20.7 MiB | 7.0 MiB | 29.3 ms | 6.3 ms |
 
-[^ver]: A build of the `v2` branch at commit be7e4e3, before its version
-    number was bumped.
+[^size]: A plain `cargo build --release`. The AUR package links with packed
+    relocations and comes out about 120 KiB smaller.
 [^dunst]: Too good to be true. dunst attaches a buffer to its 24×24 cursor
     surface as it starts, about 31 ms before it draws the Popup, and the
     benchmark takes that first commit for the Popup's first frame (a limit
@@ -75,7 +77,10 @@ What the table says, plainly:
   about 9 MiB.
 - **While showing Popups**, fnott and mako use about 2 MiB less PSS than
   Lucent, and less peak RSS too. Lucent's binary is also the largest here.
-- **Latency** is on par with mako and fnott, warm or cold. Cold start is the
+  These figures are at scale 1; on a HiDPI monitor every daemon that draws
+  at full resolution needs more pixels for its buffers.
+- **Latency** is on par with mako and fnott, warm or cold: Lucent's cold start
+  now matches mako's. Cold start is still the
   price of Idle exit: the first Notification after a quiet spell starts a
   process, which costs about 20 ms more than a warm one.
 
@@ -121,12 +126,14 @@ notify-send -u critical -a Power -i battery-caution "Battery low" "5% remaining.
   **Icons** come from your icon theme (PNG or SVG), or from an image the app
   sends (album art, avatars).
 - **Mouse:** left-click runs the Default action and dismisses the Popup,
+  bringing the app's window to the front if it supports activation;
   middle-click dismisses it, right-click dismisses everything. Hovering a
   Popup pauses its timeout. Popups never take keyboard focus.
 - **Stack and Queue:** up to five Popups are shown at once, newest nearest the
   anchor corner. The rest wait in the Queue, shown as "+N more", and appear as
   space frees up. A Notification that replaces another (a volume change, say)
-  updates its Popup in place.
+  updates its Popup in place, even if it reuses an id whose Popup has
+  gone, as `notify-send -r 9999` scripts do.
 
 `lucent --default-config` prints the reference config; that is the only
 command-line option.
@@ -225,6 +232,11 @@ idle_exit = false
 Lucent draws a translucent Popup and leaves blur and enter/exit animation to
 the compositor, so it never draws a frame it doesn't need. Every Popup is a
 layer surface with the namespace `lucent`.
+
+Blur needs no setup on compositors that offer the `ext-background-effect-v1`
+protocol (Hyprland 0.57 does): Lucent asks for it behind every translucent
+Popup, shaped to its rounded corners. Elsewhere, add the rule for your
+compositor below. Opaque Themes never ask for blur.
 
 | Compositor | Blur | Enter/exit animation |
 | --- | --- | --- |
@@ -343,8 +355,9 @@ If it says `org.freedesktop.Notifications is already owned by mako (pid
 [Switching](#switching-from-mako-dunst-or-swaync). When D-Bus starts Lucent,
 its log goes to your user journal: `journalctl --user -b | grep -i lucent`.
 
-**No blur.** Blur is your compositor's job: add the rule for your compositor
-from [Blur and animation](#blur-and-animation). On Hyprland,
+**No blur.** Blur is your compositor's job. Lucent asks for it where the
+compositor offers `ext-background-effect-v1`; otherwise add the rule for your
+compositor from [Blur and animation](#blur-and-animation). On Hyprland,
 `hyprctl layers` should list a `lucent` layer while a Popup is showing. With
 no blur available, `preset = "opaque"` looks intentional rather than
 see-through.

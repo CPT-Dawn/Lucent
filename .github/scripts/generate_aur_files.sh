@@ -58,6 +58,9 @@ sha256sums=('${sha256}')
 build() {
   cd "\${_reponame}-\${pkgver}"
   export CARGO_TARGET_DIR="target"
+  # Packed relocations: about 6% off the binary and no startup relocation
+  # pass. Arch's glibc is new enough; generic source builds leave it out.
+  export RUSTFLAGS="\${RUSTFLAGS:-} -C link-arg=-Wl,-z,pack-relative-relocs"
   cargo build --release --locked
 }
 

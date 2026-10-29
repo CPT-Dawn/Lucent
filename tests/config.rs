@@ -202,3 +202,37 @@ fn lucent_default_config_prints_toml_that_parses_back_to_the_defaults() {
     assert!(printed.contains("[general]") && printed.contains("[layout]"));
     assert_eq!(Config::parse(&printed), (defaults(), vec![]));
 }
+
+#[test]
+fn numbers_lucent_cannot_draw_are_clamped_and_reported() {
+    let (config, problems) =
+        Config::parse("[layout]\nwidth = 0\ngap = 4000000000\n[general]\nbody_lines = 0");
+    assert_eq!(config.layout.width, 64, "0 is a layer-shell protocol error");
+    assert_eq!(config.layout.gap, 1024);
+    assert_eq!(config.general.body_lines, 1);
+    assert_eq!(
+        problems,
+        [
+            Problem::OutOfRange {
+                key: "layout.width".into(),
+                used: 64
+            },
+            Problem::OutOfRange {
+                key: "layout.gap".into(),
+                used: 1024
+            },
+            Problem::OutOfRange {
+                key: "general.body_lines".into(),
+                used: 1
+            },
+        ]
+    );
+}
+
+#[test]
+fn theme_sizes_are_bounded_when_resolved() {
+    let (config, _) = Config::parse("[theme]\nicon_size = 4000000000\nsummary_size = 0");
+    let theme = config.theme_for(&Default::default());
+    assert_eq!(theme.icon_size, lucent::icon::MAX_SIZE);
+    assert_eq!(theme.summary_size, 1);
+}

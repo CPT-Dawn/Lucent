@@ -3,7 +3,9 @@
 //! freedesktop icon theme (`linicon`).
 //!
 //! An image is loaded once, when its Popup opens or its image changes, and the
-//! surface lives only as long as that Popup. Anything that cannot be loaded
+//! surface lives only as long as that Popup. On a scaled monitor it holds
+//! more pixels than the icon size, with a Cairo device scale saying so:
+//! drawn at the icon size, it then fills every device pixel. Anything that cannot be loaded
 //! is logged at debug level and the Popup is shown without an icon.
 
 use std::io::Cursor;
@@ -19,6 +21,13 @@ use crate::{debug, xdg};
 /// Image files larger than this are not read at all.
 const MAX_FILE_BYTES: u64 = 16 << 20;
 
+/// PNGs with a longer side than this are not decoded: a small file can
+/// declare a huge image, and decoding allocates all of it at once.
+const MAX_PNG_SIDE: u32 = 4096;
+
+/// The largest icon size honoured, in pixels; a bigger one is cut to it.
+pub const MAX_SIZE: u32 = 1024;
+
 /// The fallback theme every icon theme inherits from.
 const HICOLOR: &str = "hicolor";
 
@@ -26,6 +35,8 @@ const HICOLOR: &str = "hicolor";
 #[derive(Debug, Clone)]
 pub struct Icons {
     size: u32,
+    /// Device pixels per icon pixel.
+    scale: f64,
     theme: String,
     /// `$XDG_DATA_HOME/icons`, where the user's own icon themes live;
     /// `linicon` searches only `~/.icons` and `$XDG_DATA_DIRS` itself.
@@ -50,10 +61,25 @@ impl Icons {
             .into_iter()
             .collect();
         Self {
-            size: size.max(1),
+            size: size.clamp(1, MAX_SIZE),
+            scale: 1.0,
             theme,
             search_paths,
         }
+    }
+
+    /// Loads for a monitor at `scale` (1.0 unless set), in device pixels per
+    /// surface pixel.
+    pub fn with_scale(mut self, scale: f64) -> Self {
+        if scale.is_finite() && (0.1..=10.0).contains(&scale) {
+            self.scale = scale;
+        }
+        self
+    }
+
+    /// The longest side, in device pixels.
+    fn device_size(&self) -> u32 {
+        (f64::from(self.size) * self.scale).round().max(1.0) as u32
     }
 
     /// The image scaled so its longest side is the icon size, or `None` if
@@ -86,7 +112,7 @@ impl Icons {
             }
         };
         let usable = |icon: &linicon::IconPath| icon.icon_type != linicon::IconType::XMP;
-        let size = u16::try_from(self.size).unwrap_or(u16::MAX);
+        let size = u16::try_from(self.device_size()).unwrap_or(u16::MAX);
         if let Some(icon) = search().with_size(size).filter_map(Result::ok).find(usable) {
             return Some(icon.path);
         }
@@ -137,6 +163,9 @@ impl Icons {
         }
         let bytes = std::fs::read(path).map_err(|e| fail(&e))?;
         if bytes.starts_with(b"\x89PNG") {
+            if !png_size_ok(&bytes) {
+                return Err(fail(&format!("larger than {MAX_PNG_SIDE} px a side")));
+            }
             let png =
                 ImageSurface::create_from_png(&mut Cursor::new(bytes)).map_err(|e| fail(&e))?;
             self.fit(&png)
@@ -151,7 +180,7 @@ impl Icons {
         let tree =
             usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|e| e.to_string())?;
         let svg = tree.size();
-        let (w, h) = self.fitted(svg.width() as f64, svg.height() as f64);
+        let (w, h) = self.device(self.fitted(svg.width() as f64, svg.height() as f64));
         let mut pixmap = tiny_skia::Pixmap::new(w as u32, h as u32).ok_or("empty SVG")?;
         let transform =
             tiny_skia::Transform::from_scale(w as f32 / svg.width(), h as f32 / svg.height());
@@ -172,7 +201,15 @@ impl Icons {
                 data[y * stride + x * 4..][..4].copy_from_slice(&argb.to_ne_bytes());
             }
         }
+        let logical = self.fitted(svg.width() as f64, svg.height() as f64);
+        set_scale(&surface, logical);
         Ok(surface)
+    }
+
+    /// `logical`, an icon-pixel size from [`Self::fitted`], in device pixels.
+    fn device(&self, (w, h): (i32, i32)) -> (i32, i32) {
+        let side = |v: i32| ((f64::from(v) * self.scale).round() as i32).max(1);
+        (side(w), side(h))
     }
 
     /// The size an image of `w`x`h` is drawn at: its longest side is the
@@ -187,7 +224,8 @@ impl Icons {
     /// `src` scaled once to the icon size, smoothly in both directions.
     fn fit(&self, src: &ImageSurface) -> Result<ImageSurface, String> {
         let (sw, sh) = (src.width() as f64, src.height() as f64);
-        let (w, h) = self.fitted(sw, sh);
+        let logical = self.fitted(sw, sh);
+        let (w, h) = self.device(logical);
         let out = ImageSurface::create(Format::ARgb32, w, h).map_err(|e| e.to_string())?;
         let cr = Context::new(&out).map_err(|e| e.to_string())?;
         cr.scale(w as f64 / sw, h as f64 / sh);
@@ -196,7 +234,43 @@ impl Icons {
         cr.set_source(&pattern).map_err(|e| e.to_string())?;
         cr.paint().map_err(|e| e.to_string())?;
         drop(cr);
+        set_scale(&out, logical);
         Ok(out)
+    }
+}
+
+/// Gives `surface` the device scale that makes it `logical` icon pixels
+/// in size, whatever it holds in device pixels.
+fn set_scale(surface: &ImageSurface, (w, h): (i32, i32)) {
+    surface.set_device_scale(
+        f64::from(surface.width()) / f64::from(w.max(1)),
+        f64::from(surface.height()) / f64::from(h.max(1)),
+    );
+}
+
+/// An icon's size in surface pixels: its pixels divided by its device
+/// scale, which [`Icons`] sets on every surface it loads.
+pub fn extent(icon: &ImageSurface) -> (f64, f64) {
+    let (sx, sy) = icon.device_scale();
+    (
+        f64::from(icon.width()) / sx.max(f64::MIN_POSITIVE),
+        f64::from(icon.height()) / sy.max(f64::MIN_POSITIVE),
+    )
+}
+
+/// Whether the PNG in `bytes` declares, in its `IHDR` chunk, a size
+/// [`MAX_PNG_SIDE`] allows. A header too short to say is left to Cairo,
+/// which rejects it.
+fn png_size_ok(bytes: &[u8]) -> bool {
+    let side = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    // Signature (8), chunk length (4), "IHDR" (4), then width and height.
+    match (side(16), side(20)) {
+        (Some(w), Some(h)) => w <= MAX_PNG_SIDE && h <= MAX_PNG_SIDE,
+        _ => true,
     }
 }
 
