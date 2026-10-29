@@ -226,6 +226,11 @@ Lucent draws a translucent Popup and leaves blur and enter/exit animation to
 the compositor, so it never draws a frame it doesn't need. Every Popup is a
 layer surface with the namespace `lucent`.
 
+Blur needs no setup on compositors that offer the `ext-background-effect-v1`
+protocol (Hyprland 0.57 does): Lucent asks for it behind every translucent
+Popup, shaped to its rounded corners. Elsewhere, add the rule for your
+compositor below. Opaque Themes never ask for blur.
+
 | Compositor | Blur | Enter/exit animation |
 | --- | --- | --- |
 | Hyprland | yes | yes (`slide`, `popin`, `fade`) |
@@ -343,8 +348,9 @@ If it says `org.freedesktop.Notifications is already owned by mako (pid
 [Switching](#switching-from-mako-dunst-or-swaync). When D-Bus starts Lucent,
 its log goes to your user journal: `journalctl --user -b | grep -i lucent`.
 
-**No blur.** Blur is your compositor's job: add the rule for your compositor
-from [Blur and animation](#blur-and-animation). On Hyprland,
+**No blur.** Blur is your compositor's job. Lucent asks for it where the
+compositor offers `ext-background-effect-v1`; otherwise add the rule for your
+compositor from [Blur and animation](#blur-and-animation). On Hyprland,
 `hyprctl layers` should list a `lucent` layer while a Popup is showing. With
 no blur available, `preset = "opaque"` looks intentional rather than
 see-through.
