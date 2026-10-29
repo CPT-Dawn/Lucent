@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::image::Image;
 
 /// A Notification as an application asked for it, already stripped of any
 /// transport types.
@@ -19,6 +20,8 @@ pub struct Notification {
     /// The id of a live Notification this one should update in place; 0 (or
     /// any id that matches nothing) asks for a fresh one.
     pub replaces_id: u32,
+    /// The image chosen from `app_icon` and the image hints.
+    pub image: Option<Image>,
 }
 
 /// What the renderer should show for one Notification.
@@ -28,6 +31,7 @@ pub struct Popup {
     pub app_name: String,
     pub summary: String,
     pub body: String,
+    pub image: Option<Image>,
     /// Notifications waiting in the Queue, shown as a "+N more" hint. Only the
     /// last Popup of the Stack carries a non-zero count.
     pub more: usize,
@@ -130,6 +134,7 @@ impl Core {
             app_name: n.app_name,
             summary: n.summary,
             body: n.body,
+            image: n.image,
             more: 0,
         };
         if self.stack.len() >= self.max_visible {
@@ -155,6 +160,7 @@ impl Core {
             p.app_name.clone_from(&n.app_name);
             p.summary.clone_from(&n.summary);
             p.body.clone_from(&n.body);
+            p.image.clone_from(&n.image);
         };
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
             update(popup);

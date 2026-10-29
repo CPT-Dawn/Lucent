@@ -18,7 +18,7 @@ use dbus::channel::{BusType, Channel};
 use dbus::message::MessageType;
 
 use crate::core::{CloseReason, Effect, Event, Notification};
-use crate::debug;
+use crate::{debug, image};
 
 pub const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
@@ -175,7 +175,7 @@ impl DbusAdapter {
 
 fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
     // Signature susssasa{sv}i. The fields not used yet arrive with their tickets.
-    let (app_name, replaces_id, _app_icon, summary, body, _actions, _hints, _timeout): (
+    let (app_name, replaces_id, app_icon, summary, body, _actions, hints, _timeout): (
         String,
         u32,
         String,
@@ -187,6 +187,7 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
     ) = msg.read_all()?;
     debug!("Notify from {app_name:?}: {summary:?}");
     Ok(Notification {
+        image: image::from_hints(&app_icon, &hints),
         app_name,
         summary,
         body,
