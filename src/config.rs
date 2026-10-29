@@ -42,6 +42,10 @@ pub struct General {
     /// file.
     #[serde(deserialize_with = "millis")]
     pub idle_grace: Duration,
+    /// What each pointer button does on a Popup.
+    pub left_click: ClickAction,
+    pub middle_click: ClickAction,
+    pub right_click: ClickAction,
 }
 
 impl Default for General {
@@ -51,8 +55,25 @@ impl Default for General {
             max_visible: 5,
             idle_exit: true,
             idle_grace: Duration::from_secs(5),
+            left_click: ClickAction::InvokeDefaultAction,
+            middle_click: ClickAction::Dismiss,
+            right_click: ClickAction::DismissAll,
         }
     }
+}
+
+/// What a click on a Popup does, bound per button in `[general]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClickAction {
+    /// Run the Default action, if the Notification has one, then dismiss.
+    InvokeDefaultAction,
+    /// Dismiss this Popup without running anything.
+    Dismiss,
+    /// Dismiss every Popup, and the Queue behind them.
+    DismissAll,
+    /// Do nothing.
+    None,
 }
 
 /// `[layout]`

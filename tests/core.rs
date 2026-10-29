@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use lucent::config::Config;
-use lucent::core::{CloseReason, Core, Effect, Event, Notification, Popup};
+use lucent::core::{Button, CloseReason, Core, Effect, Event, Notification, Popup};
 
 fn hello() -> Notification {
     Notification {
@@ -11,6 +11,7 @@ fn hello() -> Notification {
         summary: "Hello".into(),
         body: "World".into(),
         replaces_id: 0,
+        actions: vec![],
     }
 }
 
@@ -317,6 +318,20 @@ fn starts_idle(effects: &[Effect]) -> bool {
     effects
         .iter()
         .any(|e| matches!(e, Effect::StartIdleTimer { .. }))
+}
+
+#[test]
+fn dismissing_everything_at_once_starts_the_grace_period() {
+    let mut core = idle_core("general.max_visible = 1\ngeneral.right_click = \"dismiss-all\"");
+    let a = notify(&mut core, titled("a"));
+    notify(&mut core, titled("b"));
+
+    let effects = core.handle(Event::Click {
+        id: a,
+        button: Button::Right,
+    });
+
+    assert!(starts_idle(&effects), "{effects:?}");
 }
 
 #[test]

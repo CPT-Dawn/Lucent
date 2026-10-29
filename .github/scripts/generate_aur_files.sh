@@ -16,17 +16,28 @@ pkgname="lucent"
 _reponame="Lucent"
 pkgver="${release_tag#v}"
 pkgrel="${PKGREL:-1}"
-maintainer="${AUR_MAINTAINER:-CPT-Dawn <dawnsp0456@gmail.com>}"
+maintainer="${AUR_MAINTAINER:-CPT-Dawn <dev@cptdawn.dev>}"
 repo="${GITHUB_REPOSITORY:-CPT-Dawn/Lucent}"
 server_url="${GITHUB_SERVER_URL:-https://github.com}"
 
 tarball_url="${server_url}/${repo}/archive/refs/tags/${release_tag}.tar.gz"
 
-tmp_tarball="$(mktemp)"
-trap 'rm -f "$tmp_tarball"' EXIT
+# SOURCE_TARBALL lets a local run checksum a tarball already on disk instead
+# of downloading the release (e.g. to test the PKGBUILD before tagging).
+if [[ -n "${SOURCE_TARBALL:-}" ]]; then
+  sha256="$(sha256sum "$SOURCE_TARBALL" | awk '{print $1}')"
+else
+  tmp_tarball="$(mktemp)"
+  trap 'rm -f "$tmp_tarball"' EXIT
+  curl -fsSL "$tarball_url" -o "$tmp_tarball"
+  sha256="$(sha256sum "$tmp_tarball" | awk '{print $1}')"
+fi
 
-curl -fsSL "$tarball_url" -o "$tmp_tarball"
-sha256="$(sha256sum "$tmp_tarball" | awk '{print $1}')"
+pkgdesc="The lightest notification daemon for Wayland"
+
+# depends mirrors the binary's NEEDED libraries. No wayland: wayland-client is
+# pure Rust here and never links libwayland-client. No libxkbcommon: sctk is
+# built without its keyboard feature.
 
 cat > PKGBUILD <<EOF
 # Maintainer: ${maintainer}
@@ -34,14 +45,13 @@ pkgname=${pkgname}
 _reponame=${_reponame}
 pkgver=${pkgver}
 pkgrel=${pkgrel}
-pkgdesc="A blazing-fast, D-Bus activated Wayland notification daemon"
+pkgdesc="${pkgdesc}"
 arch=('x86_64' 'aarch64')
 url="${server_url}/${repo}"
 license=('MIT')
-depends=('glib2' 'gtk4' 'gtk4-layer-shell' 'dbus')
+depends=('cairo' 'pango' 'glib2' 'dbus' 'libgcc' 'glibc')
 makedepends=('cargo')
 provides=("lucent")
-conflicts=("lucent-git")
 source=("${tarball_url}")
 sha256sums=('${sha256}')
 
@@ -55,19 +65,20 @@ package() {
   cd "\${_reponame}-\${pkgver}"
 
   install -Dm755 "target/release/lucent" "\${pkgdir}/usr/bin/lucent"
-  
+
   install -Dm644 \\
-    "org.freedesktop.Notifications.service" \\
-    "\${pkgdir}/usr/share/dbus-1/services/org.freedesktop.Notifications.service"
+    "dev.cptdawn.Lucent.service" \\
+    "\${pkgdir}/usr/share/dbus-1/services/dev.cptdawn.Lucent.service"
 
   install -Dm644 LICENSE "\${pkgdir}/usr/share/licenses/\${pkgname}/LICENSE"
   install -Dm644 README.md "\${pkgdir}/usr/share/doc/\${pkgname}/README.md"
+  install -Dm644 default_config.toml "\${pkgdir}/usr/share/doc/\${pkgname}/config.toml"
 }
 EOF
 
 cat > .SRCINFO <<EOF
 pkgbase = ${pkgname}
-	pkgdesc = A blazing-fast, D-Bus activated Wayland notification daemon
+	pkgdesc = ${pkgdesc}
 	pkgver = ${pkgver}
 	pkgrel = ${pkgrel}
 	url = ${server_url}/${repo}
@@ -75,12 +86,13 @@ pkgbase = ${pkgname}
 	arch = aarch64
 	license = MIT
 	makedepends = cargo
+	depends = cairo
+	depends = pango
 	depends = glib2
-	depends = gtk4
-	depends = gtk4-layer-shell
 	depends = dbus
+	depends = libgcc
+	depends = glibc
 	provides = lucent
-	conflicts = lucent-git
 	source = ${tarball_url}
 	sha256sums = ${sha256}
 
