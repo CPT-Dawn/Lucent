@@ -185,9 +185,10 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
         PropMap,
         i32,
     ) = msg.read_all()?;
-    debug!("Notify from {app_name:?}: {summary:?}");
+    let image = image::from_hints(&app_icon, &hints);
+    debug!("Notify from {app_name:?}: {summary:?}, image {image:?}");
     Ok(Notification {
-        image: image::from_hints(&app_icon, &hints),
+        image,
         app_name,
         summary,
         body,
