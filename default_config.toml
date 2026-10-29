@@ -141,6 +141,13 @@ left = 16
 # this opacity, in percent, so they don't compete for attention.
 # low_opacity = 60
 
+# The longest side of a Popup's icon or image, in pixels.
+# icon_size = 48
+
+# The icon theme app icons are looked up in, by its directory name under
+# /usr/share/icons or ~/.local/share/icons. Empty uses your GTK icon theme
+# (gtk-icon-theme-name in ~/.config/gtk-3.0/settings.ini), else hicolor.
+# icon_theme = ""
 
 # [[rule]]
 #

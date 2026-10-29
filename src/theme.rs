@@ -186,6 +186,11 @@ theme_fields! {
     critical: Rgba,
     /// How visible low-urgency text, accent and progress fill are, in percent.
     low_opacity: u8,
+    /// The longest side of a Popup's icon or image, in pixels.
+    icon_size: u32,
+    /// The freedesktop icon theme app icons are looked up in; empty means
+    /// the GTK icon theme, else `hicolor`.
+    icon_theme: String,
 }
 
 impl Theme {
@@ -212,6 +217,8 @@ impl Theme {
             progress_fill: Rgba::hex(0x8DE3DC, 1.0),
             critical: Rgba::hex(0xF7768E, 1.0),
             low_opacity: 60,
+            icon_size: 48,
+            icon_theme: String::new(),
         }
     }
 

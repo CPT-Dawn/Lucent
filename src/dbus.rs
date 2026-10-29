@@ -18,7 +18,7 @@ use dbus::channel::{BusType, Channel};
 use dbus::message::MessageType;
 
 use crate::core::{Action, Button, CloseReason, Effect, Event, Notification, Timeout, Urgency};
-use crate::debug;
+use crate::{debug, image};
 
 pub const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
@@ -28,7 +28,7 @@ const PATH: &str = "/org/freedesktop/Notifications";
 const TEST_INTERFACE: &str = "dev.cptdawn.Lucent.Test";
 
 /// Capabilities are added only in the change that implements them.
-const CAPABILITIES: [&str; 3] = ["body", "body-hyperlinks", "body-markup"];
+const CAPABILITIES: [&str; 4] = ["body", "body-hyperlinks", "body-markup", "icon-static"];
 
 /// The session bus went away; nothing more can be served.
 #[derive(Debug)]
@@ -208,7 +208,7 @@ impl DbusAdapter {
 
 fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
     // Signature susssasa{sv}i. The fields not used yet arrive with their tickets.
-    let (app_name, replaces_id, _app_icon, summary, body, actions, hints, timeout): (
+    let (app_name, replaces_id, app_icon, summary, body, actions, hints, timeout): (
         String,
         u32,
         String,
@@ -218,8 +218,10 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
         PropMap,
         i32,
     ) = msg.read_all()?;
-    debug!("Notify from {app_name:?}: {summary:?}");
+    let image = image::from_hints(&app_icon, &hints);
+    debug!("Notify from {app_name:?}: {summary:?}, image {image:?}");
     Ok(Notification {
+        image,
         app_name,
         summary,
         body,

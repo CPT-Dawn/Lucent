@@ -188,3 +188,18 @@ fn the_documented_theme_values_are_midnight_bloom() {
     assert_eq!(problems, []);
     assert_eq!(config.theme(), Theme::preset("midnight-bloom").unwrap());
 }
+
+#[test]
+fn icons_are_48_px_from_the_system_icon_theme_unless_overridden() {
+    let default = theme_for("", Urgency::Normal);
+    assert_eq!((default.icon_size, default.icon_theme.as_str()), (48, ""));
+
+    let set = theme_for(
+        "[theme]\nicon_size = 64\nicon_theme = \"Papirus-Dark\"",
+        Urgency::Normal,
+    );
+    assert_eq!(
+        (set.icon_size, set.icon_theme.as_str()),
+        (64, "Papirus-Dark")
+    );
+}

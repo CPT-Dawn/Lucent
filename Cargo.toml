@@ -16,9 +16,11 @@ calloop-wayland-source = "0.4"
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
 wayland-client = "0.31"
 dbus = "0.9"
-cairo-rs = "0.22"
+cairo-rs = { version = "0.22", features = ["png"] }
 pango = "0.22"
 pangocairo = "0.22"
+resvg = { version = "0.49", default-features = false }
+linicon = { version = "2.3", default-features = false }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 serde_ignored = "0.1"

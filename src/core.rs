@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::config::{ClickAction, Config};
+use crate::image::Image;
 use crate::markup;
 use crate::theme::Theme;
 
@@ -28,6 +29,8 @@ pub struct Notification {
     pub timeout: Timeout,
     /// The `value` hint, as sent: progress in percent, unchecked.
     pub value: Option<i64>,
+    /// The image chosen from `app_icon` and the image hints.
+    pub image: Option<Image>,
 }
 
 /// A labelled choice the sender offers; the key is reported back when it is
@@ -100,6 +103,7 @@ pub struct Popup {
     pub app_name: String,
     pub summary: String,
     pub body: String,
+    pub image: Option<Image>,
     /// Notifications waiting in the Queue, shown as a "+N more" hint. Only the
     /// last Popup of the Stack carries a non-zero count.
     pub more: usize,
@@ -328,6 +332,7 @@ impl Core {
             app_name: n.app_name,
             summary: n.summary,
             body: markup::clean(&n.body),
+            image: n.image,
             more: 0,
             body_lines: self.config.general.body_lines,
             expire,
@@ -369,6 +374,7 @@ impl Core {
             p.app_name.clone_from(&n.app_name);
             p.summary.clone_from(&n.summary);
             p.body = markup::clean(&n.body);
+            p.image.clone_from(&n.image);
             p.expire = expire;
             p.value = progress(n.value);
             p.theme.clone_from(&theme);

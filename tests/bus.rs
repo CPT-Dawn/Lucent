@@ -224,7 +224,10 @@ fn reports_server_information_and_capabilities_and_accepts_notify() {
     let (caps,): (Vec<String>,) = notifications(&client)
         .method_call(NAME, "GetCapabilities", ())
         .unwrap();
-    assert_eq!(caps, ["body", "body-hyperlinks", "body-markup"]);
+    assert_eq!(
+        caps,
+        ["body", "body-hyperlinks", "body-markup", "icon-static"]
+    );
 
     let first = notify(&client, "Hello", "World");
     let second = notify(&client, "Hello", "again");
@@ -338,6 +341,45 @@ fn logs_only_errors_by_default_and_everything_with_lucent_log_debug() {
             assert!(stderr.is_empty(), "default log should be quiet: {stderr}");
         }
     }
+}
+
+#[test]
+fn an_image_data_hint_survives_the_wire() {
+    let bus = Bus::new();
+    let client = bus.client();
+    let mut child = bus
+        .lucent_command()
+        .env("LUCENT_LOG", "debug")
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    while !name_has_owner(&client, NAME) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut hints = PropMap::new();
+    let pixels = (2i32, 1i32, 6i32, false, 8i32, 3i32, vec![0u8; 6]);
+    hints.insert("image-data".into(), dbus::arg::Variant(Box::new(pixels)));
+    let (_id,): (u32,) = notifications(&client)
+        .method_call(
+            NAME,
+            "Notify",
+            (
+                "test-app",
+                0u32,
+                "firefox",
+                "Look",
+                "",
+                Vec::<String>::new(),
+                hints,
+                -1i32,
+            ),
+        )
+        .unwrap();
+    child.kill().unwrap();
+    let stderr = String::from_utf8_lossy(&child.wait_with_output().unwrap().stderr).into_owned();
+
+    assert!(stderr.contains("Pixels(2x1)"), "debug log: {stderr}");
 }
 
 #[test]

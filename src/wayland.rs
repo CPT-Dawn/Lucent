@@ -33,6 +33,7 @@ use wayland_client::{Connection, QueueHandle};
 
 use crate::config::{self, Layout};
 use crate::core::{Button, Event, Popup};
+use crate::icon::Icons;
 use crate::{debug, draw, error, warn};
 
 /// The layer namespace compositor rules can target.
@@ -60,6 +61,8 @@ pub struct Wayland {
 
 struct Surface {
     popup: Popup,
+    /// The Popup's image, loaded once at the icon size; dropped with it.
+    icon: Option<cairo::ImageSurface>,
     layer: LayerSurface,
     width: u32,
     height: u32,
@@ -173,8 +176,18 @@ impl Wayland {
         let mut commit = false;
         let mut redraw = false;
         if surface.popup != *popup {
+            let theme = (&popup.theme.icon_size, &popup.theme.icon_theme);
+            if surface.popup.image != popup.image
+                || theme
+                    != (
+                        &surface.popup.theme.icon_size,
+                        &surface.popup.theme.icon_theme,
+                    )
+            {
+                surface.icon = load_icon(popup);
+            }
             surface.popup = popup.clone();
-            let height = draw::measure(popup, surface.width);
+            let height = draw::measure(popup, surface.icon.as_ref(), surface.width);
             if height != surface.height {
                 // The configure answering this commit redraws at the new size.
                 surface.height = height;
@@ -201,7 +214,8 @@ impl Wayland {
 
     fn open(&mut self, popup: Popup, offset: i32) -> Surface {
         let width = self.layout.width;
-        let height = draw::measure(&popup, width);
+        let icon = load_icon(&popup);
+        let height = draw::measure(&popup, icon.as_ref(), width);
         let output = self.output();
         let surface = self.compositor.create_surface(&self.qh);
         let layer = self.layer_shell.create_layer_surface(
@@ -220,6 +234,7 @@ impl Wayland {
         debug!("opened popup {} ({width}x{height})", popup.id);
         Surface {
             popup,
+            icon,
             layer,
             width,
             height,
@@ -248,7 +263,13 @@ impl Wayland {
                 stride,
             )?;
             let cr = cairo::Context::new(&target)?;
-            let painted = draw::paint(&cr, &surface.popup, surface.width, surface.height);
+            let painted = draw::paint(
+                &cr,
+                &surface.popup,
+                surface.icon.as_ref(),
+                surface.width,
+                surface.height,
+            );
             drop(cr);
             target.finish();
             painted?;
@@ -259,6 +280,12 @@ impl Wayland {
         surface.layer.commit();
         Ok(())
     }
+}
+
+/// The Popup's image at its Theme's icon size, if it has one that loads.
+fn load_icon(popup: &Popup) -> Option<cairo::ImageSurface> {
+    let image = popup.image.as_ref()?;
+    Icons::new(popup.theme.icon_size, &popup.theme.icon_theme).load(image)
 }
 
 fn anchor(anchor: config::Anchor) -> Anchor {
