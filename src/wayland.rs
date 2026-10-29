@@ -15,9 +15,7 @@ use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
-use smithay_client_toolkit::seat::pointer::{
-    BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, PointerEvent, PointerEventKind, PointerHandler,
-};
+use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::wlr_layer::{
@@ -490,30 +488,23 @@ impl PointerHandler for Wayland {
                     self.hover_action(index, x, y);
                     continue;
                 }
-                PointerEventKind::Press { button, .. } => match button {
-                    BTN_LEFT => {
-                        let surface = &self.surfaces[index];
-                        match surface.action_rects.iter().position(|b| b.contains(x, y)) {
-                            Some(at) => Event::InvokeAction {
-                                id,
-                                key: surface.popup.actions[at].key.clone(),
-                            },
-                            None => Event::Click {
-                                id,
-                                button: Button::Left,
-                            },
-                        }
+                PointerEventKind::Press { button: code, .. } => {
+                    let Some(button) = Button::from_code(code) else {
+                        continue;
+                    };
+                    let surface = &self.surfaces[index];
+                    // Actions answer the left button; any other acts on the Popup.
+                    let action = (button == Button::Left)
+                        .then(|| surface.action_rects.iter().position(|r| r.contains(x, y)))
+                        .flatten();
+                    match action {
+                        Some(at) => Event::InvokeAction {
+                            id,
+                            key: surface.popup.actions[at].key.clone(),
+                        },
+                        None => Event::Click { id, button },
                     }
-                    BTN_MIDDLE => Event::Click {
-                        id,
-                        button: Button::Middle,
-                    },
-                    BTN_RIGHT => Event::Click {
-                        id,
-                        button: Button::Right,
-                    },
-                    _ => continue,
-                },
+                }
                 _ => continue,
             };
             self.events.push(event);

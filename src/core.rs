@@ -52,6 +52,27 @@ pub enum Button {
     Right,
 }
 
+impl Button {
+    /// Every button Lucent binds: its name and its Linux evdev code
+    /// (`BTN_LEFT` and friends in `linux/input-event-codes.h`), which is what
+    /// Wayland pointers send.
+    const ALL: [(Self, &str, u32); 3] = [
+        (Self::Left, "left", 0x110),
+        (Self::Right, "right", 0x111),
+        (Self::Middle, "middle", 0x112),
+    ];
+
+    /// The button with this evdev code, if Lucent binds it.
+    pub fn from_code(code: u32) -> Option<Self> {
+        Self::ALL.iter().find(|b| b.2 == code).map(|b| b.0)
+    }
+
+    /// The button called `name`: `left`, `middle` or `right`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().find(|b| b.1 == name).map(|b| b.0)
+    }
+}
+
 /// The sender-declared importance of a Notification.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]

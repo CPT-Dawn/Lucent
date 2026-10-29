@@ -235,3 +235,14 @@ fn a_hovered_popup_does_not_expire() {
 
     assert_eq!(core.handle(Event::TimerFired(id)), []);
 }
+
+#[test]
+fn pointer_buttons_map_from_evdev_codes_and_names() {
+    // BTN_LEFT, BTN_RIGHT, BTN_MIDDLE and BTN_SIDE from linux/input-event-codes.h.
+    assert_eq!(Button::from_code(0x110), Some(Button::Left));
+    assert_eq!(Button::from_code(0x111), Some(Button::Right));
+    assert_eq!(Button::from_code(0x112), Some(Button::Middle));
+    assert_eq!(Button::from_code(0x113), None);
+    assert_eq!(Button::from_name("middle"), Some(Button::Middle));
+    assert_eq!(Button::from_name("back"), None);
+}

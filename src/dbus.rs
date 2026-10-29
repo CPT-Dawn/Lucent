@@ -267,26 +267,18 @@ fn test_hook(
 ) -> Message {
     use crate::core::Button;
     let event = match msg.member().as_deref() {
-        Some("Click") => match msg.read2::<u32, &str>() {
-            Ok((id, "left")) => Event::Click {
-                id,
-                button: Button::Left,
-            },
-            Ok((id, "middle")) => Event::Click {
-                id,
-                button: Button::Middle,
-            },
-            Ok((id, "right")) => Event::Click {
-                id,
-                button: Button::Right,
-            },
-            _ => {
-                return msg.error(
-                    &"org.freedesktop.DBus.Error.InvalidArgs".into(),
-                    c"expected (u id, s left|middle|right)",
-                );
+        Some("Click") => {
+            let click = msg.read2::<u32, &str>().ok();
+            match click.and_then(|(id, name)| Some((id, Button::from_name(name)?))) {
+                Some((id, button)) => Event::Click { id, button },
+                None => {
+                    return msg.error(
+                        &"org.freedesktop.DBus.Error.InvalidArgs".into(),
+                        c"expected (u id, s left|middle|right)",
+                    );
+                }
             }
-        },
+        }
         Some("InvokeAction") => match msg.read2::<u32, String>() {
             Ok((id, key)) => Event::InvokeAction { id, key },
             Err(_) => {
