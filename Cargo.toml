@@ -1,35 +1,48 @@
 [package]
 name = "lucent"
-version = "1.1.0"
-edition = "2021"
-authors = ["Swastik Patel"]
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.92"
+authors = ["Swastik Patel <dev@cptdawn.dev>"]
 license = "MIT"
-description = "A blazing-fast, visually stunning Wayland notification daemon"
+description = "The lightest notification daemon for Wayland"
 repository = "https://github.com/CPT-Dawn/Lucent"
 keywords = ["wayland", "notification", "daemon", "hyprland", "dbus"]
-categories = ["gui", "system-tools"]
+categories = ["gui", "command-line-utilities"]
+
+[features]
+# Serves `dev.cptdawn.Lucent.Test`, which stands in for the pointer while
+# drawing is off so the bus tests can click Popups nobody sees. For tests
+# only: release builds and packages must leave it off.
+test-hooks = []
 
 [dependencies]
-# D-Bus server — tokio-native, no background async-io thread
-zbus = { version = "5", default-features = false, features = ["tokio"] }
-
-# Async runtime for the D-Bus listener
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
-
-# UI framework — pinned to 0.10 for gtk4-layer-shell 0.7 compatibility
-gtk4 = { version = "0.10", features = ["v4_12"] }
-
-# Wayland layer-shell integration for overlay notification windows
-gtk4-layer-shell = "0.7"
-
-# Configuration
+calloop = "0.14"
+calloop-wayland-source = "0.4"
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
+wayland-client = "0.31"
+dbus = "0.9"
+cairo-rs = { version = "0.22", features = ["png"] }
+pango = "0.22"
+pangocairo = "0.22"
+resvg = { version = "0.49", default-features = false }
+linicon = { version = "2.3", default-features = false }
 serde = { version = "1", features = ["derive"] }
-toml = "1.0"
-directories = "6"
+toml = "1"
+serde_ignored = "0.1"
 
 [profile.release]
-opt-level = 3
+# Size over speed: the binary's text is private memory no other process
+# shares, while the hot paths (Cairo, Pango) are C libraries this does not
+# touch. tiny-skia, the one Rust rasteriser, keeps full optimisation below.
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[profile.release.package.tiny-skia]
+opt-level = 3
+
+[dev-dependencies]
+tempfile = "3"

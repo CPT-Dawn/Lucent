@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Resolve release tag
         shell: bash
@@ -84,7 +84,7 @@ jobs:
           GITHUB_REF_NAME: ${{ env.AUR_RELEASE_TAG }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
-          AUR_MAINTAINER: CPT-Dawn <dawnsp0456@gmail.com>
+          AUR_MAINTAINER: CPT-Dawn <dev@cptdawn.dev>
           PKGREL: "1"
         run: |
           set -euo pipefail

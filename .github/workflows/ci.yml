@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libcairo2-dev libpango1.0-dev libwayland-dev libdbus-1-dev dbus
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked --all-targets --features test-hooks -- -D warnings
+
+      # Unit tests (pure core, config) and the integration suites, including
+      # the D-Bus test that spawns its own private dbus-daemon. Plain `cargo
+      # test` proves release builds lack the test interface; the second run
+      # compiles it in so the bus tests can click Popups.
+      - name: Test
+        run: |
+          cargo test --locked
+          cargo test --locked --features test-hooks
