@@ -195,20 +195,37 @@ fn a_replacement_updates_its_popup_in_place_and_restarts_its_timeout() {
 }
 
 #[test]
-fn a_replaces_id_that_matches_nothing_gets_a_fresh_id() {
+fn a_replaces_id_that_matches_nothing_is_shown_under_that_id() {
     let mut core = Core::new();
     let gone = notify(&mut core, titled("gone"));
     core.handle(Event::TimerFired(gone));
     let live = notify(&mut core, titled("live"));
 
-    let fresh = notify(&mut core, replacing(gone, "back"));
-    let effects = core.handle(Event::Notify(replacing(4242, "stranger")));
+    let back = notify(&mut core, replacing(gone, "back"));
+    let stranger = notify(&mut core, replacing(4242, "stranger"));
+    let effects = core.handle(Event::Notify(replacing(4242, "stranger again")));
 
-    assert!(![gone, live].contains(&fresh), "{fresh} must be a new id");
+    assert_eq!(
+        (back, stranger),
+        (gone, 4242),
+        "the spec returns replaces_id"
+    );
+    assert_eq!(effects.first(), Some(&Effect::Accepted(4242)));
     assert_eq!(
         last_stack(&effects),
-        stack(&[("stranger", 0), ("back", 0), ("live", 0)])
+        stack(&[("stranger again", 0), ("back", 0), ("live", 0)])
     );
+    assert_ne!(live, gone);
+}
+
+#[test]
+fn fresh_ids_skip_one_a_sender_chose() {
+    let mut core = Core::new();
+    let chosen = notify(&mut core, replacing(2, "chosen"));
+    let first = notify(&mut core, titled("first"));
+    let second = notify(&mut core, titled("second"));
+
+    assert_eq!((chosen, first, second), (2, 1, 3));
 }
 
 #[test]

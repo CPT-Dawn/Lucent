@@ -474,7 +474,7 @@ fn closing_an_unknown_id_emits_nothing() {
 }
 
 #[test]
-fn a_replacement_keeps_the_id_and_an_unknown_replaces_id_gets_a_fresh_one() {
+fn a_replacement_keeps_the_id_even_when_the_old_one_is_gone() {
     let bus = Bus::new();
     let _lucent = bus.spawn_lucent();
     let client = bus.client();
@@ -482,8 +482,8 @@ fn a_replacement_keeps_the_id_and_an_unknown_replaces_id_gets_a_fresh_one() {
     let id = notify(&client, "volume", "40%");
     assert_eq!(notify_replacing(&client, id, "volume", "45%"), id);
 
-    let fresh = notify_replacing(&client, 4242, "stranger", "hi");
-    assert!(fresh != id && fresh != 4242, "got {fresh}");
+    assert_eq!(notify_replacing(&client, 4242, "stranger", "hi"), 4242);
+    assert_eq!(notify_replacing(&client, 4242, "stranger", "again"), 4242);
 }
 
 /// Waits for Lucent to end on its own and returns how long that took.

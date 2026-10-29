@@ -19,8 +19,10 @@ pub struct Notification {
     pub app_name: String,
     pub summary: String,
     pub body: String,
-    /// The id of a live Notification this one should update in place; 0 (or
-    /// any id that matches nothing) asks for a fresh one.
+    /// The id of a Notification this one should update in place. One that
+    /// is no longer live is shown afresh under this same id, as the spec
+    /// asks, so a script reusing a fixed id keeps replacing its Popup; 0
+    /// asks for a fresh id.
     pub replaces_id: u32,
     pub actions: Vec<Action>,
     /// Decides the Urgency style of the Popup's Theme, and whether it expires.
@@ -371,8 +373,10 @@ impl Core {
         if let Some(effects) = self.replace(&n) {
             return effects;
         }
-        self.last_id = self.last_id.wrapping_add(1).max(1);
-        let id = self.last_id;
+        let id = match n.replaces_id {
+            0 => self.fresh_id(),
+            id => id,
+        };
         let timeout = self.expiry(&n);
         let theme = self.theme(&n);
         let popup = Popup {
@@ -397,6 +401,22 @@ impl Core {
         let mut effects = vec![Effect::Accepted(id), self.stack_effect()];
         effects.extend(self.start_timer(id, timeout));
         effects
+    }
+
+    /// The next id after the last one handed out, skipping any still live:
+    /// one a sender chose through `replaces_id`, or one left from before
+    /// the numbering wrapped.
+    fn fresh_id(&mut self) -> u32 {
+        loop {
+            self.last_id = self.last_id.wrapping_add(1).max(1);
+            if !self.is_live(self.last_id) {
+                return self.last_id;
+            }
+        }
+    }
+
+    fn is_live(&self, id: u32) -> bool {
+        self.stack.iter().chain(&self.queue).any(|p| p.id == id)
     }
 
     /// How long a Notification stays up once shown: never for critical ones,
