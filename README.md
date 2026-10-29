@@ -391,9 +391,13 @@ Issues and pull requests are welcome. Before opening a PR:
 
 ```sh
 cargo fmt --all
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --features test-hooks -- -D warnings
 cargo test
+cargo test --features test-hooks
 ```
+
+The `test-hooks` feature adds a D-Bus interface the bus tests use to click
+Popups without a compositor. Never enable it in a build you install.
 
 The vocabulary is in [GLOSSARY.md](GLOSSARY.md) and the big decisions are in
 [docs/adr/](docs/adr/). Changes that cost idle memory or wakeups need a very

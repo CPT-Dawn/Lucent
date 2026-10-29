@@ -17,14 +17,16 @@ use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
 use dbus::channel::{BusType, Channel};
 use dbus::message::MessageType;
 
-use crate::core::{Action, Button, CloseReason, Effect, Event, Notification, Timeout, Urgency};
+use crate::core::{Action, CloseReason, Effect, Event, Notification, Timeout, Urgency};
 use crate::{debug, image};
 
 pub const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 
 /// Stands in for the pointer while drawing is off, so the bus tests can click
-/// a Popup that is never shown. Served only after [`DbusAdapter::enable_test_hooks`].
+/// a Popup that is never shown. Compiled in only with the `test-hooks`
+/// feature, and served only after [`DbusAdapter::with_test_hooks`].
+#[cfg(feature = "test-hooks")]
 const TEST_INTERFACE: &str = "dev.cptdawn.Lucent.Test";
 
 /// Capabilities are added only in the change that implements them.
@@ -42,6 +44,7 @@ pub struct Disconnected;
 
 pub struct DbusAdapter {
     conn: Connection,
+    #[cfg(feature = "test-hooks")]
     test_hooks: bool,
 }
 
@@ -53,6 +56,7 @@ impl DbusAdapter {
         channel.set_watch_enabled(true);
         Ok(Self {
             conn: Connection::from(channel),
+            #[cfg(feature = "test-hooks")]
             test_hooks: false,
         })
     }
@@ -60,8 +64,10 @@ impl DbusAdapter {
     /// Serves [`TEST_INTERFACE`]: `Click(u id, s button)` with `left`,
     /// `middle` or `right` acts as a pointer press on that Popup, and
     /// `InvokeAction(u id, s key)` as a press on its button for Action `key`.
-    pub fn enable_test_hooks(&mut self) {
+    #[cfg(feature = "test-hooks")]
+    pub fn with_test_hooks(mut self) -> Self {
         self.test_hooks = true;
+        self
     }
 
     /// Claims the well-known name. `Ok(Err(owner))` describes the process that
@@ -146,6 +152,7 @@ impl DbusAdapter {
             interface.as_deref().unwrap_or("?"),
             member.as_deref().unwrap_or("?")
         );
+        #[cfg(feature = "test-hooks")]
         if self.test_hooks && interface.as_deref() == Some(TEST_INTERFACE) {
             return test_hook(msg, handle, pending);
         }
@@ -250,11 +257,13 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
     })
 }
 
+#[cfg(feature = "test-hooks")]
 fn test_hook(
     msg: &Message,
     handle: &mut impl FnMut(Event) -> Vec<Effect>,
     pending: &mut Vec<Effect>,
 ) -> Message {
+    use crate::core::Button;
     let event = match msg.member().as_deref() {
         Some("Click") => match msg.read2::<u32, &str>() {
             Ok((id, "left")) => Event::Click {

@@ -10,6 +10,12 @@ repository = "https://github.com/CPT-Dawn/Lucent"
 keywords = ["wayland", "notification", "daemon", "hyprland", "dbus"]
 categories = ["gui", "command-line-utilities"]
 
+[features]
+# Serves `dev.cptdawn.Lucent.Test`, which stands in for the pointer while
+# drawing is off so the bus tests can click Popups nobody sees. For tests
+# only: release builds and packages must leave it off.
+test-hooks = []
+
 [dependencies]
 calloop = "0.14"
 calloop-wayland-source = "0.4"

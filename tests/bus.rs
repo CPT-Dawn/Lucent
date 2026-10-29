@@ -588,6 +588,24 @@ fn notifications_sent_while_lucent_shuts_down_are_answered_or_reactivate_it() {
 }
 
 #[test]
+#[cfg(not(feature = "test-hooks"))]
+fn without_the_test_hooks_feature_the_test_interface_does_not_exist() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+    let id = notify(&client, "Hello", "");
+
+    let click: Result<(), _> =
+        notifications(&client).method_call("dev.cptdawn.Lucent.Test", "Click", (id, "left"));
+
+    assert_eq!(
+        click.unwrap_err().name(),
+        Some("org.freedesktop.DBus.Error.UnknownMethod")
+    );
+}
+
+#[test]
+#[cfg(feature = "test-hooks")]
 fn clicking_a_notification_with_a_default_action_invokes_it_then_dismisses() {
     let bus = Bus::new();
     let _lucent = bus.spawn_lucent();
@@ -650,6 +668,7 @@ fn clicking_a_notification_with_a_default_action_invokes_it_then_dismisses() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn pressing_an_action_button_invokes_its_key_then_dismisses() {
     let bus = Bus::new();
     let _lucent = bus.spawn_lucent();

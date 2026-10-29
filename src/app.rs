@@ -61,11 +61,14 @@ const NO_DRAW: &str = "LUCENT_NO_DRAW";
 
 pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
     let no_draw = std::env::var_os(NO_DRAW).is_some();
-    let mut dbus = DbusAdapter::connect()?;
-    if no_draw {
-        // No pointer without a compositor: let the bus tests click instead.
-        dbus.enable_test_hooks();
-    }
+    let dbus = DbusAdapter::connect()?;
+    // No pointer without a compositor: let the bus tests click instead.
+    #[cfg(feature = "test-hooks")]
+    let dbus = if no_draw {
+        dbus.with_test_hooks()
+    } else {
+        dbus
+    };
     if let Err(owner) = dbus.acquire_name()? {
         error!(
             "{} is already owned by {owner}; stop it to use Lucent",
