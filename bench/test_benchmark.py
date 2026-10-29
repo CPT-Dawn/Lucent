@@ -101,6 +101,26 @@ class Wakeups(unittest.TestCase):
         self.assertEqual(bench.context_switches([]), 0)
 
 
+class WakeupsOverAWindow(unittest.TestCase):
+    """Samples are {thread id: context switches so far}, one per second."""
+
+    def test_counts_the_switches_each_thread_made_inside_the_window(self):
+        samples = [{1: 100, 2: 50}, {1: 104, 2: 51}, {1: 110, 2: 53}]
+        self.assertEqual(bench.window_wakeups(samples), 13)
+
+    def test_a_thread_that_exits_does_not_subtract_its_history(self):
+        # dunst's helper thread 2 exits after the first second.
+        samples = [{1: 100, 2: 500}, {1: 101, 2: 503}, {1: 102}]
+        self.assertEqual(bench.window_wakeups(samples), 5)
+
+    def test_a_thread_born_inside_the_window_counts_from_zero(self):
+        samples = [{1: 100}, {1: 101, 3: 4}]
+        self.assertEqual(bench.window_wakeups(samples), 5)
+
+    def test_no_samples_means_no_wakeups(self):
+        self.assertEqual(bench.window_wakeups([]), 0)
+
+
 class StatusFields(unittest.TestCase):
     def test_reads_kib_fields_as_bytes(self):
         self.assertEqual(bench.status_kib(MAIN_STATUS, "VmHWM"), 14336 * 1024)

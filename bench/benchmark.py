@@ -97,6 +97,19 @@ def context_switches(statuses):
     )
 
 
+def window_wakeups(samples):
+    """Context switches made during a window, from per-second samples of
+    {thread id: switches so far}. Each thread counts from its first sample
+    (or from zero if it was born inside the window) to its last, so a thread
+    that exits takes nothing with it."""
+    if not samples:
+        return 0
+    first, last = samples[0], {}
+    for sample in samples:
+        last.update(sample)
+    return sum(count - first.get(tid, 0) for tid, count in last.items())
+
+
 def status_kib(status, name):
     """A `kB` field of a /proc status or smaps_rollup text, in bytes, or None."""
     value = _status_field(status, name)
@@ -399,14 +412,15 @@ def log(msg):
 # --------------------------------------------------------------------------
 
 
-def proc_statuses(pid):
-    texts = []
+def thread_switches(pid):
+    """{thread id: context switches so far} for every thread of `pid`."""
+    counts = {}
     for task in Path(f"/proc/{pid}/task").glob("*"):
         try:
-            texts.append((task / "status").read_text())
+            counts[int(task.name)] = context_switches([(task / "status").read_text()])
         except OSError:
             pass
-    return texts
+    return counts
 
 
 def proc_status(pid):
@@ -475,20 +489,17 @@ def measure_idle(daemon, root, settle, window):
         bus.server_information()
         pid = bus.pid()
         time.sleep(settle)
-        first = last = None
+        samples = []
         end = time.monotonic() + window
         while True:
             if pid and Path(f"/proc/{pid}").exists():
-                count = context_switches(proc_statuses(pid))
-                first = count if first is None else first
-                last = count
+                samples.append(thread_switches(pid))
             if time.monotonic() >= end:
                 break
             time.sleep(1)
         alive = pid is not None and Path(f"/proc/{pid}").exists()
         rss = status_kib(proc_status(pid), "VmRSS") if alive else None
-        wakeups = 0 if first is None else last - first
-        return rss, wakeups
+        return rss, window_wakeups(samples)
     finally:
         bus.close()
 
