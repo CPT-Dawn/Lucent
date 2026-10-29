@@ -27,7 +27,8 @@ const HICOLOR: &str = "hicolor";
 pub struct Icons {
     size: u32,
     theme: String,
-    /// Searched for icon themes before the standard XDG locations.
+    /// `$XDG_DATA_HOME/icons`, where the user's own icon themes live;
+    /// `linicon` searches only `~/.icons` and `$XDG_DATA_DIRS` itself.
     search_paths: Vec<String>,
 }
 
@@ -44,18 +45,15 @@ impl Icons {
         } else {
             theme.to_owned()
         };
+        let search_paths = xdg::data_home()
+            .map(|data| data.join("icons").to_string_lossy().into_owned())
+            .into_iter()
+            .collect();
         Self {
             size: size.max(1),
             theme,
-            search_paths: Vec::new(),
+            search_paths,
         }
-    }
-
-    /// Also looks for icon themes under `path`, before anywhere else.
-    pub fn with_search_path(mut self, path: impl AsRef<Path>) -> Self {
-        self.search_paths
-            .push(path.as_ref().to_string_lossy().into_owned());
-        self
     }
 
     /// The image scaled so its longest side is the icon size, or `None` if
