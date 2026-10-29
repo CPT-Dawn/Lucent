@@ -512,6 +512,7 @@ def main():
     results = []
     for d in chosen:
         log(f"{d.name}: {d.binary}")
+        ver = version(d.binary)  # before measuring, while it names this binary
         droot = root / re.sub(r"\W+", "-", d.name).strip("-")
         droot.mkdir(exist_ok=True)
         log("  cold start")
@@ -525,7 +526,7 @@ def main():
         results.append(
             Result(
                 daemon=d.name,
-                version=version(d.binary),
+                version=ver,
                 binary_bytes=Path(d.binary).stat().st_size,
                 idle_rss=idle_rss,
                 idle_wakeups=wakeups,
