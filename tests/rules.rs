@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use lucent::config::{Config, REFERENCE};
+use lucent::config::{Config, Problem, REFERENCE};
 use lucent::core::{Core, Effect, Event, Notification, Popup, Timeout, Urgency};
 use lucent::theme::Rgba;
 
@@ -205,4 +205,32 @@ fn the_reference_config_documents_rules_with_a_working_example() {
         spotify.theme,
         shown("", sent("Spotify", Urgency::Normal)).0.theme
     );
+}
+
+#[test]
+fn an_unknown_preset_in_a_rule_is_reported_and_falls_back_to_midnight_bloom() {
+    let text = r##"
+        theme.preset = "light"
+
+        [[rule]]
+        app_name = "Spotify"
+        theme = { preset = "tokyo", radius = 4 }
+    "##;
+
+    let (config, problems) = Config::parse(text);
+    let effects = Core::with_config(config).handle(Event::Notify(sent("Spotify", Urgency::Normal)));
+    let theme = effects.into_iter().find_map(|e| match e {
+        Effect::Stack(popups) => popups.into_iter().next().map(|p| p.theme),
+        _ => None,
+    });
+
+    assert_eq!(
+        problems,
+        [Problem::UnknownRulePreset {
+            rule: 1,
+            name: "tokyo".into()
+        }]
+    );
+    let bloom_with_radius_4 = shown("theme.radius = 4", sent("Spotify", Urgency::Normal)).0;
+    assert_eq!(theme, Some(bloom_with_radius_4.theme));
 }

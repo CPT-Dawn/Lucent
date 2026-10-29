@@ -119,7 +119,7 @@ macro_rules! theme_fields {
         #[serde(default)]
         pub struct ThemeOverride {
             /// Replace the whole Theme with this Preset before setting the
-            /// fields. A name that matches no Preset leaves the Theme as it was.
+            /// fields. A name that matches no Preset counts as Midnight Bloom.
             pub preset: Option<String>,
             $( $(#[doc = $doc])* pub $field: Option<$ty>, )*
         }
@@ -127,8 +127,8 @@ macro_rules! theme_fields {
         impl ThemeOverride {
             /// Changes `theme` by this layer: the Preset first, then each field set.
             pub fn apply(&self, theme: &mut Theme) {
-                if let Some(preset) = self.preset.as_deref().and_then(Theme::preset) {
-                    *theme = preset;
+                if let Some(name) = self.preset.as_deref() {
+                    *theme = Theme::preset(name).unwrap_or_default();
                 }
                 $( if let Some(value) = &self.$field {
                     theme.$field = value.clone();

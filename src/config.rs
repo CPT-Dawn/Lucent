@@ -210,6 +210,10 @@ pub enum Problem {
     /// `[theme] preset` names no Preset; Midnight Bloom stands in, with the
     /// `[theme]` overrides still applied.
     UnknownPreset(String),
+    /// The `[[rule]]` numbered `rule` (from 1, in file order) names no
+    /// Preset; Midnight Bloom stands in for it, with the Rule's own Theme
+    /// fields still applied.
+    UnknownRulePreset { rule: usize, name: String },
 }
 
 impl std::fmt::Display for Problem {
@@ -218,15 +222,24 @@ impl std::fmt::Display for Problem {
             Self::Invalid(e) => write!(f, "invalid config, using the defaults: {e}"),
             Self::UnknownKey(key) => write!(f, "unknown config key `{key}` ignored"),
             Self::UnknownPreset(name) => {
-                let known: Vec<_> = Theme::PRESETS.iter().map(|(n, _)| *n).collect();
+                write!(f, "unknown theme preset `{name}`, using midnight-bloom")?;
+                write_presets(f)
+            }
+            Self::UnknownRulePreset { rule, name } => {
                 write!(
                     f,
-                    "unknown theme preset `{name}`, using midnight-bloom (have: {})",
-                    known.join(", ")
-                )
+                    "rule {rule}: unknown theme preset `{name}`, using midnight-bloom"
+                )?;
+                write_presets(f)
             }
         }
     }
+}
+
+/// Lists the Presets after an unknown name, so a typo is easy to fix.
+fn write_presets(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let known: Vec<_> = Theme::PRESETS.iter().map(|(n, _)| *n).collect();
+    write!(f, " (have: {})", known.join(", "))
 }
 
 impl Config {
@@ -271,6 +284,14 @@ impl Config {
                 let mut problems: Vec<_> = unknown.into_iter().map(Problem::UnknownKey).collect();
                 if let Some(name) = config.theme.unknown_preset() {
                     problems.push(Problem::UnknownPreset(name.into()));
+                }
+                for (i, rule) in config.rules.iter().enumerate() {
+                    if let Some(name) = rule.theme.unknown_preset() {
+                        problems.push(Problem::UnknownRulePreset {
+                            rule: i + 1,
+                            name: name.into(),
+                        });
+                    }
                 }
                 (config, problems)
             }
