@@ -40,6 +40,12 @@ pub struct General {
     pub left_click: ClickAction,
     pub middle_click: ClickAction,
     pub right_click: ClickAction,
+    /// Whether a sender's requested timeout replaces `timeout`. Critical
+    /// Notifications never expire either way.
+    #[serde(alias = "honour_app_timeouts")]
+    pub honor_app_timeouts: bool,
+    /// Body lines shown before the rest is cut with an ellipsis.
+    pub body_lines: u32,
 }
 
 impl Default for General {
@@ -50,6 +56,8 @@ impl Default for General {
             left_click: ClickAction::InvokeDefaultAction,
             middle_click: ClickAction::Dismiss,
             right_click: ClickAction::DismissAll,
+            honor_app_timeouts: true,
+            body_lines: 4,
         }
     }
 }

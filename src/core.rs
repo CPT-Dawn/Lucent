@@ -8,10 +8,11 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::config::{ClickAction, Config};
+use crate::markup;
 
 /// A Notification as an application asked for it, already stripped of any
 /// transport types.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Notification {
     pub app_name: String,
     pub summary: String,
@@ -20,6 +21,9 @@ pub struct Notification {
     /// any id that matches nothing) asks for a fresh one.
     pub replaces_id: u32,
     pub actions: Vec<Action>,
+    pub urgency: Urgency,
+    /// How long the sender asked for the Popup to stay up.
+    pub timeout: Timeout,
 }
 
 /// A labelled choice the sender offers; the key is reported back when it is
@@ -41,6 +45,49 @@ pub enum Button {
     Right,
 }
 
+/// The sender-declared importance of a Notification.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Urgency {
+    Low,
+    #[default]
+    Normal,
+    /// Never expires, whatever the sender requests.
+    Critical,
+}
+
+impl Urgency {
+    /// From the spec's `urgency` hint byte; unknown values count as normal.
+    pub fn from_byte(byte: u8) -> Self {
+        match byte {
+            0 => Self::Low,
+            2 => Self::Critical,
+            _ => Self::Normal,
+        }
+    }
+}
+
+/// A sender's requested expiry, as the spec's `expire_timeout`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Timeout {
+    /// Lucent's configured timeout (`-1`, or any negative value).
+    #[default]
+    Default,
+    /// Stay until closed (`0`).
+    Never,
+    After(Duration),
+}
+
+impl Timeout {
+    /// From `expire_timeout` in milliseconds.
+    pub fn from_millis(millis: i32) -> Self {
+        match u64::try_from(millis) {
+            Ok(0) => Self::Never,
+            Ok(ms) => Self::After(Duration::from_millis(ms)),
+            Err(_) => Self::Default,
+        }
+    }
+}
+
 /// What the renderer should show for one Notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Popup {
@@ -51,6 +98,10 @@ pub struct Popup {
     /// Notifications waiting in the Queue, shown as a "+N more" hint. Only the
     /// last Popup of the Stack carries a non-zero count.
     pub more: usize,
+    /// The most lines of body to show before cutting it with an ellipsis.
+    pub body_lines: u32,
+    /// How long the Popup stays up once shown; `None` until closed.
+    pub expire: Option<Duration>,
 }
 
 /// Why a Notification closed, as numbered by the freedesktop spec.
@@ -102,7 +153,7 @@ pub enum Effect {
 
 /// Where a visible Popup's timeout stands.
 #[derive(Debug, Clone, Copy)]
-enum Timeout {
+enum Countdown {
     /// A timer started at `started` fires after `after`.
     Running { started: Instant, after: Duration },
     /// Hovered: no timer runs, and `remaining` is left once the pointer goes.
@@ -133,7 +184,7 @@ pub struct Core {
     /// The Actions of every live Notification that offers any.
     actions: HashMap<u32, Vec<Action>>,
     /// The timeout of every Popup in the Stack.
-    timeouts: HashMap<u32, Timeout>,
+    timeouts: HashMap<u32, Countdown>,
     clock: Clock,
 }
 
@@ -193,13 +244,16 @@ impl Core {
         }
         self.last_id = self.last_id.wrapping_add(1).max(1);
         let id = self.last_id;
+        let expire = self.expiry(&n);
         self.set_actions(id, n.actions);
         let popup = Popup {
             id,
             app_name: n.app_name,
             summary: n.summary,
-            body: n.body,
+            body: markup::clean(&n.body),
             more: 0,
+            body_lines: self.config.general.body_lines,
+            expire,
         };
         if self.stack.len() >= self.max_visible {
             self.queue.push_back(popup);
@@ -207,25 +261,41 @@ impl Core {
         }
         self.stack.insert(0, popup);
         let mut effects = vec![Effect::Accepted(id), self.stack_effect()];
-        effects.extend(self.start_timer(id, self.config.general.timeout));
+        effects.extend(self.start_timer(id, expire));
         effects
+    }
+
+    /// How long a Notification stays up once shown: never for critical ones,
+    /// otherwise what the sender asked unless the config says to ignore it.
+    fn expiry(&self, n: &Notification) -> Option<Duration> {
+        let general = &self.config.general;
+        match (n.urgency, n.timeout) {
+            (Urgency::Critical, _) => None,
+            (_, Timeout::Never) if general.honor_app_timeouts => None,
+            (_, Timeout::After(after)) if general.honor_app_timeouts => Some(after),
+            _ => Some(general.timeout),
+        }
     }
 
     /// Updates the live Notification `n` replaces without moving it, or
     /// returns `None` if it replaces nothing that is still live.
     fn replace(&mut self, n: &Notification) -> Option<Vec<Effect>> {
         let id = n.replaces_id;
+        let expire = self.expiry(n);
         let update = |p: &mut Popup| {
             p.app_name.clone_from(&n.app_name);
             p.summary.clone_from(&n.summary);
-            p.body.clone_from(&n.body);
+            p.body = markup::clean(&n.body);
+            p.expire = expire;
         };
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
             update(popup);
             self.set_actions(id, n.actions.clone());
-            let mut effects = vec![Effect::Accepted(id), self.stack_effect()];
-            effects.extend(self.start_timer(id, self.config.general.timeout));
-            return Some(effects);
+            // A replacement that never expires must also stop the old timer.
+            let timer = self
+                .start_timer(id, expire)
+                .unwrap_or(Effect::CancelTimer(id));
+            return Some(vec![Effect::Accepted(id), self.stack_effect(), timer]);
         }
         let queued = self.queue.iter_mut().find(|p| p.id == id)?;
         update(queued);
@@ -235,7 +305,7 @@ impl Core {
 
     fn expire(&mut self, id: u32) -> Vec<Effect> {
         // A paused timeout has no timer; one that fired anyway is stale.
-        if !matches!(self.timeouts.get(&id), Some(Timeout::Running { .. })) {
+        if !matches!(self.timeouts.get(&id), Some(Countdown::Running { .. })) {
             return vec![];
         }
         self.remove(id, CloseReason::Expired, vec![])
@@ -283,34 +353,39 @@ impl Core {
     }
 
     /// Starts `id`'s timeout, or, while it is hovered, only resets what will
-    /// be left once the pointer goes.
-    fn start_timer(&mut self, id: u32, after: Duration) -> Option<Effect> {
-        if let Some(Timeout::Paused { remaining }) = self.timeouts.get_mut(&id) {
+    /// be left once the pointer goes. A Popup that never expires (`None`) has
+    /// no timeout at all.
+    fn start_timer(&mut self, id: u32, expire: Option<Duration>) -> Option<Effect> {
+        let Some(after) = expire else {
+            self.timeouts.remove(&id);
+            return None;
+        };
+        if let Some(Countdown::Paused { remaining }) = self.timeouts.get_mut(&id) {
             *remaining = after;
             return None;
         }
         let started = (self.clock.0)();
         self.timeouts
-            .insert(id, Timeout::Running { started, after });
+            .insert(id, Countdown::Running { started, after });
         Some(Effect::StartTimer { id, after })
     }
 
     fn hover_start(&mut self, id: u32) -> Vec<Effect> {
-        let Some(&Timeout::Running { started, after }) = self.timeouts.get(&id) else {
+        let Some(&Countdown::Running { started, after }) = self.timeouts.get(&id) else {
             return vec![];
         };
         let shown = (self.clock.0)().saturating_duration_since(started);
         let remaining = after.saturating_sub(shown);
-        self.timeouts.insert(id, Timeout::Paused { remaining });
+        self.timeouts.insert(id, Countdown::Paused { remaining });
         vec![Effect::CancelTimer(id)]
     }
 
     fn hover_end(&mut self, id: u32) -> Vec<Effect> {
-        let Some(&Timeout::Paused { remaining }) = self.timeouts.get(&id) else {
+        let Some(&Countdown::Paused { remaining }) = self.timeouts.get(&id) else {
             return vec![];
         };
         self.timeouts.remove(&id);
-        self.start_timer(id, remaining).into_iter().collect()
+        self.start_timer(id, Some(remaining)).into_iter().collect()
     }
 
     /// Empties the Stack and the Queue in one change, reporting each closed.
@@ -358,7 +433,7 @@ impl Core {
             let Some(popup) = self.queue.pop_front() else {
                 break;
             };
-            effects.extend(self.start_timer(popup.id, self.config.general.timeout));
+            effects.extend(self.start_timer(popup.id, popup.expire));
             self.stack.insert(0, popup);
         }
         effects

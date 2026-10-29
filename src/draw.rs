@@ -14,7 +14,6 @@ use crate::core::Popup;
 const PADDING: f64 = 16.0;
 const LINE_GAP: f64 = 4.0;
 const RADIUS: f64 = 20.0;
-const BODY_MAX_LINES: i32 = 6;
 const FONT: &str = "Inter, sans-serif";
 
 type Rgba = (f64, f64, f64, f64);
@@ -23,6 +22,8 @@ const BORDER: Rgba = rgba(0xFC, 0xFD, 0xFD, 0.13);
 const APP_NAME: Rgba = rgba(0x92, 0xA8, 0xA9, 1.0);
 const SUMMARY: Rgba = rgba(0xC0, 0xCA, 0xF5, 1.0);
 const BODY: Rgba = rgba(0xA9, 0xB1, 0xD6, 1.0);
+/// Links in a body: styled, never clickable.
+const LINK_SPAN: &str = r##"<span foreground="#8DE3DC" underline="single">"##;
 
 const fn rgba(r: u8, g: u8, b: u8, a: f64) -> Rgba {
     (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0, a)
@@ -53,14 +54,9 @@ fn layouts(cr: &Context, popup: &Popup, width: u32) -> Vec<(Layout, Rgba)> {
     summary.set_text(&popup.summary);
     blocks.push((summary, SUMMARY));
     if !popup.body.is_empty() {
-        let layout = block("10", BODY_MAX_LINES);
-        // Invalid markup would make Pango drop the text; show it plain instead.
-        // Proper markup cleaning arrives with its own ticket.
-        if pango::parse_markup(&popup.body, '\0').is_ok() {
-            layout.set_markup(&popup.body);
-        } else {
-            layout.set_text(&popup.body);
-        }
+        let lines = i32::try_from(popup.body_lines.max(1)).unwrap_or(i32::MAX);
+        let layout = block("10", lines);
+        set_body(&layout, &popup.body);
         blocks.push((layout, BODY));
     }
     if popup.more > 0 {
@@ -70,6 +66,19 @@ fn layouts(cr: &Context, popup: &Popup, width: u32) -> Vec<(Layout, Rgba)> {
         blocks.push((layout, APP_NAME));
     }
     blocks
+}
+
+/// Sets a body the core has already cleaned to `b`, `i`, `u` and `a`.
+fn set_body(layout: &Layout, body: &str) {
+    // Pango has no `<a>`; the cleaned body holds it only as these exact tags.
+    let markup = body.replace("<a>", LINK_SPAN).replace("</a>", "</span>");
+    // Cleaned markup always parses; should it ever not, Pango would drop
+    // the text, so show it plain rather than lose it.
+    if pango::parse_markup(&markup, '\0').is_ok() {
+        layout.set_markup(&markup);
+    } else {
+        layout.set_text(body);
+    }
 }
 
 fn content_height(blocks: &[(Layout, Rgba)]) -> f64 {

@@ -13,6 +13,8 @@ fn defaults() -> Config {
             left_click: ClickAction::InvokeDefaultAction,
             middle_click: ClickAction::Dismiss,
             right_click: ClickAction::DismissAll,
+            honor_app_timeouts: true,
+            body_lines: 4,
         },
         layout: Layout {
             anchor: Anchor::TopRight,
@@ -64,6 +66,8 @@ fn a_full_config_sets_every_field() {
         left_click = "dismiss-all"
         middle_click = "none"
         right_click = "invoke-default-action"
+        honor_app_timeouts = false
+        body_lines = 2
 
         [layout]
         anchor = "bottom-center"
@@ -88,6 +92,8 @@ fn a_full_config_sets_every_field() {
                 left_click: ClickAction::DismissAll,
                 middle_click: ClickAction::None,
                 right_click: ClickAction::InvokeDefaultAction,
+                honor_app_timeouts: false,
+                body_lines: 2,
             },
             layout: Layout {
                 anchor: Anchor::BottomCenter,
