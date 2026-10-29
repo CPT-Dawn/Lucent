@@ -54,6 +54,26 @@ class FirstFrame(unittest.TestCase):
         )
         self.assertAlmostEqual(bench.first_frame_ms(log, 2**32 - 3_000), 5.0)
 
+    def test_libwayland_1_24_time_of_day_stamps_with_queue_names(self):
+        # Newer libwayland prints UTC time of day and the event queue's name.
+        # t0 is 2026-10-29 16:13:47.250000 UTC, in µs since the epoch.
+        t0 = 1_793_290_427_250_000
+        log = (
+            "[16:13:47.240000] {Default Queue}  -> wl_surface#16.attach(wl_buffer#9, 0, 0)\n"
+            "[16:13:47.245000] {Default Queue}  -> wl_surface#16.commit()\n"
+            "[16:13:47.291034] {Default Queue}  -> wl_surface#16.attach(wl_buffer#15, 0, 0)\n"
+            "[16:13:47.291036]  -> wl_surface#16.commit()\n"
+        )
+        self.assertAlmostEqual(bench.first_frame_ms(log, t0), 41.036)
+
+    def test_time_of_day_stamps_survive_midnight(self):
+        t0 = 1_793_318_399_990_000  # 23:59:59.990000 UTC
+        log = (
+            "[00:00:00.001000]  -> wl_surface#3.attach(wl_buffer#4, 0, 0)\n"
+            "[00:00:00.002000]  -> wl_surface#3.commit()\n"
+        )
+        self.assertAlmostEqual(bench.first_frame_ms(log, t0), 12.0)
+
     def test_no_frame_is_none(self):
         self.assertIsNone(bench.first_frame_ms("[1.000]  -> wl_surface#3.commit()\n", 0))
 

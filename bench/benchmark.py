@@ -35,32 +35,40 @@ REPO = Path(__file__).resolve().parent.parent
 # --------------------------------------------------------------------------
 
 WRAP_US = 2**32
+DAY_US = 86_400 * 10**6
 _LINE = re.compile(
-    r"^\[\s*(\d+)\.(\d{3})\](?:\[rs\])?\s*->\s*"
+    r"^\[\s*(?:(\d+):(\d\d):(\d\d)\.(\d{6})|(\d+)\.(\d{3}))\]"
+    r"(?:\[rs\])?(?:\s*\{[^}]*\})?\s*->\s*"
     r"wl_surface[@#](\d+)\.(attach|commit)\((.*)\)"
 )
 
 
-def wl_stamp_us(realtime_ns):
-    """A wall-clock instant as WAYLAND_DEBUG stamps it: µs since epoch mod 2^32.
+def _stamp(m):
+    """A log line's stamp in µs, and the modulus it wraps at.
 
-    libwayland and wayland-rs both print this, as `[ms.µs]`."""
-    return (realtime_ns // 1000) % WRAP_US
+    wayland-rs and libwayland before 1.24 print `[ms.µs]` from the wall clock
+    (µs since the epoch mod 2^32); libwayland 1.24+ prints the UTC time of day
+    as `[HH:MM:SS.µµµµµµ]`, optionally followed by the queue's name."""
+    if m[1] is not None:
+        hours, minutes, seconds = int(m[1]), int(m[2]), int(m[3])
+        return ((hours * 60 + minutes) * 60 + seconds) * 10**6 + int(m[4]), DAY_US
+    return int(m[5]) * 1000 + int(m[6]), WRAP_US
 
 
 def first_frame_ms(log, t0_us):
-    """Milliseconds from `t0_us` (a WAYLAND_DEBUG-style stamp) to the first
-    wl_surface.commit that carries a buffer attached after t0, or None."""
+    """Milliseconds from `t0_us` (µs since the epoch) to the first
+    wl_surface.commit in a WAYLAND_DEBUG log that carries a buffer attached
+    after t0, or None."""
     pending = set()
     for line in log.splitlines():
         m = _LINE.match(line)
         if not m:
             continue
-        stamp = int(m[1]) * 1000 + int(m[2])
-        delta = (stamp - t0_us) % WRAP_US
-        if delta > WRAP_US // 2:  # before t0
+        stamp, wrap = _stamp(m)
+        delta = (stamp - t0_us) % wrap
+        if delta > wrap // 2:  # before t0
             continue
-        surface, request, args = m[3], m[4], m[5]
+        surface, request, args = m[7], m[8], m[9]
         if request == "attach":
             if args.startswith(("nil", "None")):
                 pending.discard(surface)
@@ -424,7 +432,7 @@ def measure_cold(daemon, root, runs):
     for i in range(runs + 1):  # the first run only warms the page cache
         bus = Bus(daemon, root, wayland_debug=True)
         try:
-            t0 = wl_stamp_us(time.time_ns())
+            t0 = time.time_ns() // 1000
             bus.notify(f"Cold start {i}")
             ms = wait_frame(bus, t0)
         finally:
@@ -446,7 +454,7 @@ def measure_warm(daemon, root, runs):
             # measure well inside Lucent's 5 s idle grace.
             bus.notify("Warm-up", timeout_ms=500)
             time.sleep(1.5)
-            t0 = wl_stamp_us(time.time_ns())
+            t0 = time.time_ns() // 1000
             bus.notify(f"Warm {i}", timeout_ms=500)
             ms = wait_frame(bus, t0)
             if ms is None:

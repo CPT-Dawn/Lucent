@@ -66,8 +66,10 @@ line of its `daemon.log`, and the remaining daemons are still measured.
 
 The daemon runs with `WAYLAND_DEBUG=1`, which both libwayland (mako, dunst,
 fnott, swaync through GTK) and wayland-rs (Lucent) honour, printing every
-request with a timestamp in milliseconds taken from the wall clock (µs since
-the epoch mod 2^32). The script stamps its start time the same way and finds
+request with a wall-clock timestamp: `[ms.µs]` (µs since the epoch mod 2^32)
+from wayland-rs and libwayland before 1.24, `[HH:MM:SS.µµµµµµ] {queue}` (UTC
+time of day) from libwayland 1.24 and later. The script notes the wall-clock
+time just before `notify-send` and finds
 the first `wl_surface@N.commit()` preceded by a non-nil `attach` to that
 surface. Both latencies therefore include `notify-send`'s own start-up and the
 D-Bus round trip, identically for every daemon, and stop at the commit, not
