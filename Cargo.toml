@@ -26,11 +26,17 @@ toml = "1"
 serde_ignored = "0.1"
 
 [profile.release]
-opt-level = 3
+# Size over speed: the binary's text is private memory no other process
+# shares, while the hot paths (Cairo, Pango) are C libraries this does not
+# touch. tiny-skia, the one Rust rasteriser, keeps full optimisation below.
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[profile.release.package.tiny-skia]
+opt-level = 3
 
 [dev-dependencies]
 tempfile = "3"
