@@ -38,10 +38,16 @@ script kills the bus and every daemon process it activated.
 
 Every daemon gets the same environment: an empty `XDG_CONFIG_HOME` (so each
 runs its packaged defaults; dunst and swaync then read their `/etc/xdg`
-files), a private `XDG_RUNTIME_DIR`, and the real compositor through an
-absolute `WAYLAND_DISPLAY`. Lucent runs twice: `lucent` with its default Idle
+files), a private `XDG_RUNTIME_DIR`, and the real compositor through a
+symlink to its socket in that private directory, so `WAYLAND_DISPLAY` stays a
+bare name such as `wayland-1`, as on a real desktop (fnott, for one, builds
+its control socket path from it). Lucent runs twice: `lucent` with its default Idle
 exit (ADR-0002), and `lucent (resident)` with `idle_exit = false`, which is
 the fair row to compare against daemons that stay running.
+
+A daemon that cannot be started, or stops answering, does not end the run:
+its row reads `failed` with a footnote naming the measurement and the last
+line of its `daemon.log`, and the remaining daemons are still measured.
 
 ## What is measured
 
@@ -50,7 +56,7 @@ the fair row to compare against daemons that stay running.
 | Version | `pacman -Qo` of the binary; for a Lucent built from this tree, the Cargo version and commit. |
 | Binary size | Size on disk of the executable, shared libraries not included (Lucent links Cairo and Pango; swaync links GTK). |
 | Idle RSS | `VmRSS` at the end of a window of `--idle-seconds` (default 60 s) that starts `--settle` seconds (default 10 s) after the daemon is activated by a `GetServerInformation` call, without ever showing a Popup. `0 (not running)` means the process had exited: Lucent's Idle exit, after its 5 s grace. |
-| Idle wakeups | Voluntary plus involuntary context switches, summed over all the process's threads (`/proc/PID/task/*/status`), across that same window. Each is a time the kernel woke the daemon. |
+| Idle wakeups | Voluntary plus involuntary context switches, summed over all the process's threads (`/proc/PID/task/*/status`), across that same window, sampled every second per thread so a thread that exits mid-window keeps the switches seen up to its last sample. Each is a time the kernel woke the daemon. |
 | Peak RSS, 5 Popups | `VmHWM` of a freshly activated daemon 2 s after five `notify-send` calls with a 15 s timeout. |
 | PSS, 5 Popups | `Pss` from `/proc/PID/smaps_rollup` at the same moment: RSS with shared pages (libraries, font caches) divided among the processes that share them, a fairer view than RSS of what the daemon itself costs. |
 | Cold start | Median over `--runs` (default 10) of the time from just before `notify-send` is spawned, with no daemon process running, to the daemon's first `wl_surface.commit` that carries a newly attached buffer: the Popup's first frame handed to the compositor. One extra run beforehand warms the page cache and is discarded, so this is a cold *process*, not a cold disk. |
@@ -60,8 +66,10 @@ the fair row to compare against daemons that stay running.
 
 The daemon runs with `WAYLAND_DEBUG=1`, which both libwayland (mako, dunst,
 fnott, swaync through GTK) and wayland-rs (Lucent) honour, printing every
-request with a timestamp in milliseconds taken from the wall clock (µs since
-the epoch mod 2^32). The script stamps its start time the same way and finds
+request with a wall-clock timestamp: `[ms.µs]` (µs since the epoch mod 2^32)
+from wayland-rs and libwayland before 1.24, `[HH:MM:SS.µµµµµµ] {queue}` (UTC
+time of day) from libwayland 1.24 and later. The script notes the wall-clock
+time just before `notify-send` and finds
 the first `wl_surface@N.commit()` preceded by a non-nil `attach` to that
 surface. Both latencies therefore include `notify-send`'s own start-up and the
 D-Bus round trip, identically for every daemon, and stop at the commit, not

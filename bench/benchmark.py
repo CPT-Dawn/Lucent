@@ -35,32 +35,40 @@ REPO = Path(__file__).resolve().parent.parent
 # --------------------------------------------------------------------------
 
 WRAP_US = 2**32
+DAY_US = 86_400 * 10**6
 _LINE = re.compile(
-    r"^\[\s*(\d+)\.(\d{3})\](?:\[rs\])?\s*->\s*"
+    r"^\[\s*(?:(\d+):(\d\d):(\d\d)\.(\d{6})|(\d+)\.(\d{3}))\]"
+    r"(?:\[rs\])?(?:\s*\{[^}]*\})?\s*->\s*"
     r"wl_surface[@#](\d+)\.(attach|commit)\((.*)\)"
 )
 
 
-def wl_stamp_us(realtime_ns):
-    """A wall-clock instant as WAYLAND_DEBUG stamps it: µs since epoch mod 2^32.
+def _stamp(m):
+    """A log line's stamp in µs, and the modulus it wraps at.
 
-    libwayland and wayland-rs both print this, as `[ms.µs]`."""
-    return (realtime_ns // 1000) % WRAP_US
+    wayland-rs and libwayland before 1.24 print `[ms.µs]` from the wall clock
+    (µs since the epoch mod 2^32); libwayland 1.24+ prints the UTC time of day
+    as `[HH:MM:SS.µµµµµµ]`, optionally followed by the queue's name."""
+    if m[1] is not None:
+        hours, minutes, seconds = int(m[1]), int(m[2]), int(m[3])
+        return ((hours * 60 + minutes) * 60 + seconds) * 10**6 + int(m[4]), DAY_US
+    return int(m[5]) * 1000 + int(m[6]), WRAP_US
 
 
 def first_frame_ms(log, t0_us):
-    """Milliseconds from `t0_us` (a WAYLAND_DEBUG-style stamp) to the first
-    wl_surface.commit that carries a buffer attached after t0, or None."""
+    """Milliseconds from `t0_us` (µs since the epoch) to the first
+    wl_surface.commit in a WAYLAND_DEBUG log that carries a buffer attached
+    after t0, or None."""
     pending = set()
     for line in log.splitlines():
         m = _LINE.match(line)
         if not m:
             continue
-        stamp = int(m[1]) * 1000 + int(m[2])
-        delta = (stamp - t0_us) % WRAP_US
-        if delta > WRAP_US // 2:  # before t0
+        stamp, wrap = _stamp(m)
+        delta = (stamp - t0_us) % wrap
+        if delta > wrap // 2:  # before t0
             continue
-        surface, request, args = m[3], m[4], m[5]
+        surface, request, args = m[7], m[8], m[9]
         if request == "attach":
             if args.startswith(("nil", "None")):
                 pending.discard(surface)
@@ -89,6 +97,19 @@ def context_switches(statuses):
     )
 
 
+def window_wakeups(samples):
+    """Context switches made during a window, from per-second samples of
+    {thread id: switches so far}. Each thread counts from its first sample
+    (or from zero if it was born inside the window) to its last, so a thread
+    that exits takes nothing with it."""
+    if not samples:
+        return 0
+    first, last = samples[0], {}
+    for sample in samples:
+        last.update(sample)
+    return sum(count - first.get(tid, 0) for tid, count in last.items())
+
+
 def status_kib(status, name):
     """A `kB` field of a /proc status or smaps_rollup text, in bytes, or None."""
     value = _status_field(status, name)
@@ -106,6 +127,7 @@ class Result:
     popups_pss: int | None
     cold_ms: list = field(default_factory=list)
     warm_ms: list = field(default_factory=list)
+    error: str | None = None  # set when the daemon could not be measured
 
 
 def _size(n):
@@ -120,19 +142,34 @@ def _latency(samples):
     return f"{statistics.median(samples):.1f} ms" if samples else "n/a"
 
 
+_SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
 def markdown_table(rows):
     out = [
         "| Daemon | Version | Binary size | Idle RSS | Idle wakeups "
         "| Peak RSS, 5 Popups | PSS, 5 Popups | Cold start | Warm |",
         "|---|---|--:|--:|--:|--:|--:|--:|--:|",
     ]
+    notes = []
     for r in rows:
+        head = f"| {r.daemon} | {r.version} | {_size(r.binary_bytes)} "
+        if r.error:
+            notes.append(f"{r.daemon}: {r.error}")
+            mark = "failed" + str(len(notes)).translate(_SUPERSCRIPT)
+            out.append(head + "| " + " | ".join([mark] * 6) + " |")
+            continue
         idle = "0 (not running)" if r.idle_rss is None else _size(r.idle_rss)
         out.append(
-            f"| {r.daemon} | {r.version} | {_size(r.binary_bytes)} | {idle} "
+            head + f"| {idle} "
             f"| {r.idle_wakeups} | {_size(r.peak_rss)} | {_size(r.popups_pss)} "
             f"| {_latency(r.cold_ms)} | {_latency(r.warm_ms)} |"
         )
+    if notes:
+        out.append("")
+        out += [
+            str(i).translate(_SUPERSCRIPT) + " " + n for i, n in enumerate(notes, 1)
+        ]
     return "\n".join(out) + "\n"
 
 
@@ -220,6 +257,10 @@ BUS_CONF = """\
 """
 
 
+class DaemonFailed(Exception):
+    """The daemon under test did not answer; carries the end of its log."""
+
+
 class Bus:
     """A throwaway dbus-daemon on which `daemon` is D-Bus activatable as
     org.freedesktop.Notifications, with its own config and runtime dirs."""
@@ -228,8 +269,10 @@ class Bus:
         self.root = Path(tempfile.mkdtemp(dir=root, prefix="bus-"))
         self.log = self.root / "daemon.log"
         self.pids = self.root / "pids"
-        # Socket paths are capped at 108 bytes, so the socket lives in a short
-        # directory under the real runtime dir rather than next to the logs.
+        # Socket paths are capped at 108 bytes, so the bus socket and the
+        # daemon's private XDG_RUNTIME_DIR (where daemons bind their own
+        # sockets) live in a short directory under the real runtime dir rather
+        # than next to the logs.
         self.sock_dir = Path(
             tempfile.mkdtemp(dir=os.environ["XDG_RUNTIME_DIR"], prefix="lucent-bench-")
         )
@@ -237,7 +280,7 @@ class Bus:
         services = self.root / "services"
         services.mkdir()
         config_home = self.root / "config"
-        runtime = self.root / "runtime"
+        runtime = self.sock_dir / "runtime"
         runtime.mkdir(mode=0o700)
         for rel, text in daemon.config.items():
             (config_home / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -252,7 +295,7 @@ class Bus:
             "LANG": os.environ.get("LANG", "C.UTF-8"),
             "XDG_CONFIG_HOME": str(config_home),
             "XDG_RUNTIME_DIR": str(runtime),
-            "WAYLAND_DISPLAY": os.path.join(real_runtime, display),
+            **wayland_env(real_runtime, display, runtime),
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path={socket}",
         }
         if wayland_debug:
@@ -283,9 +326,16 @@ class Bus:
             time.sleep(0.01)
 
     def run(self, *argv):
-        return subprocess.run(
-            argv, env=self.env, check=True, capture_output=True, timeout=20
-        )
+        try:
+            return subprocess.run(
+                argv, env=self.env, check=True, capture_output=True, timeout=20
+            )
+        except subprocess.CalledProcessError as e:
+            why = f"{argv[0]} exited {e.returncode}"
+        except subprocess.TimeoutExpired:
+            why = f"{argv[0]} timed out"
+        tail = self.read_log().strip().splitlines()[-1:]
+        raise DaemonFailed(f"{why}; daemon log: {tail[0] if tail else '(empty)'}")
 
     def notify(self, summary, timeout_ms=5000):
         self.run("notify-send", "-t", str(timeout_ms), summary, "Lucent benchmark body")
@@ -335,6 +385,20 @@ class Bus:
         shutil.rmtree(self.sock_dir, ignore_errors=True)
 
 
+def wayland_env(real_runtime, display, private_runtime):
+    """Make the compositor reachable from a private XDG_RUNTIME_DIR.
+
+    The compositor's socket is symlinked into `private_runtime` and
+    WAYLAND_DISPLAY is returned as a bare name, as a real session sets it.
+    Some daemons derive paths from it (fnott binds
+    `$XDG_RUNTIME_DIR/fnott-$WAYLAND_DISPLAY.sock`), so an absolute value
+    breaks them."""
+    target = Path(real_runtime, display)  # an absolute display wins the join
+    name = target.name
+    Path(private_runtime, name).symlink_to(target)
+    return {"WAYLAND_DISPLAY": name}
+
+
 def _sh_quote(s):
     return "'" + s.replace("'", "'\\''") + "'"
 
@@ -348,14 +412,15 @@ def log(msg):
 # --------------------------------------------------------------------------
 
 
-def proc_statuses(pid):
-    texts = []
+def thread_switches(pid):
+    """{thread id: context switches so far} for every thread of `pid`."""
+    counts = {}
     for task in Path(f"/proc/{pid}/task").glob("*"):
         try:
-            texts.append((task / "status").read_text())
+            counts[int(task.name)] = context_switches([(task / "status").read_text()])
         except OSError:
             pass
-    return texts
+    return counts
 
 
 def proc_status(pid):
@@ -381,7 +446,7 @@ def measure_cold(daemon, root, runs):
     for i in range(runs + 1):  # the first run only warms the page cache
         bus = Bus(daemon, root, wayland_debug=True)
         try:
-            t0 = wl_stamp_us(time.time_ns())
+            t0 = time.time_ns() // 1000
             bus.notify(f"Cold start {i}")
             ms = wait_frame(bus, t0)
         finally:
@@ -403,7 +468,7 @@ def measure_warm(daemon, root, runs):
             # measure well inside Lucent's 5 s idle grace.
             bus.notify("Warm-up", timeout_ms=500)
             time.sleep(1.5)
-            t0 = wl_stamp_us(time.time_ns())
+            t0 = time.time_ns() // 1000
             bus.notify(f"Warm {i}", timeout_ms=500)
             ms = wait_frame(bus, t0)
             if ms is None:
@@ -424,20 +489,17 @@ def measure_idle(daemon, root, settle, window):
         bus.server_information()
         pid = bus.pid()
         time.sleep(settle)
-        first = last = None
+        samples = []
         end = time.monotonic() + window
         while True:
             if pid and Path(f"/proc/{pid}").exists():
-                count = context_switches(proc_statuses(pid))
-                first = count if first is None else first
-                last = count
+                samples.append(thread_switches(pid))
             if time.monotonic() >= end:
                 break
             time.sleep(1)
         alive = pid is not None and Path(f"/proc/{pid}").exists()
         rss = status_kib(proc_status(pid), "VmRSS") if alive else None
-        wakeups = 0 if first is None else last - first
-        return rss, wakeups
+        return rss, window_wakeups(samples)
     finally:
         bus.close()
 
@@ -459,6 +521,39 @@ def measure_peak(daemon, root):
         return status_kib(proc_status(pid), "VmHWM"), status_kib(rollup, "Pss")
     finally:
         bus.close()
+
+
+def measure_daemon(daemon, root, runs, settle, idle_seconds):
+    """Every measurement of one daemon, or a Result carrying `error` if the
+    daemon could not be started or stopped answering."""
+    result = Result(
+        daemon=daemon.name,
+        version=version(daemon.binary),  # before measuring: names this binary
+        binary_bytes=Path(daemon.binary).stat().st_size,
+        idle_rss=None,
+        idle_wakeups=0,
+        peak_rss=None,
+        popups_pss=None,
+    )
+    stage = "cold start"
+    try:
+        log("  cold start")
+        result.cold_ms = measure_cold(daemon, root, runs)
+        stage = "warm"
+        log("  warm")
+        result.warm_ms = measure_warm(daemon, root, runs)
+        stage = "peak memory"
+        log("  peak memory")
+        result.peak_rss, result.popups_pss = measure_peak(daemon, root)
+        stage = "idle"
+        log(f"  idle ({settle:.0f} s settle + {idle_seconds:.0f} s window)")
+        result.idle_rss, result.idle_wakeups = measure_idle(
+            daemon, root, settle, idle_seconds
+        )
+    except (DaemonFailed, RuntimeError) as e:
+        result.error = f"{stage}: {e}"
+        log(f"  failed: {result.error}")
+    return result
 
 
 def machine():
@@ -512,30 +607,9 @@ def main():
     results = []
     for d in chosen:
         log(f"{d.name}: {d.binary}")
-        ver = version(d.binary)  # before measuring, while it names this binary
         droot = root / re.sub(r"\W+", "-", d.name).strip("-")
         droot.mkdir(exist_ok=True)
-        log("  cold start")
-        cold = measure_cold(d, droot, a.runs)
-        log("  warm")
-        warm = measure_warm(d, droot, a.runs)
-        log("  peak memory")
-        peak, pss = measure_peak(d, droot)
-        log(f"  idle ({a.settle:.0f} s settle + {a.idle_seconds:.0f} s window)")
-        idle_rss, wakeups = measure_idle(d, droot, a.settle, a.idle_seconds)
-        results.append(
-            Result(
-                daemon=d.name,
-                version=ver,
-                binary_bytes=Path(d.binary).stat().st_size,
-                idle_rss=idle_rss,
-                idle_wakeups=wakeups,
-                peak_rss=peak,
-                popups_pss=pss,
-                cold_ms=cold,
-                warm_ms=warm,
-            )
-        )
+        results.append(measure_daemon(d, droot, a.runs, a.settle, a.idle_seconds))
 
     stamp = time.strftime("%Y-%m-%d")
     report = (
