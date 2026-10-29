@@ -128,9 +128,46 @@ left = 16
 # Width of the accent line, in pixels; 0 draws none.
 # accent_width = 3
 
-# Critical Notifications take this colour for their border and accent.
+# The progress bar a Notification with a "value" hint shows: its empty
+# track, and the part filled in.
+# progress_track = "rgba(252, 253, 253, 0.12)"
+# progress_fill = "#8DE3DC"
+
+# Critical Notifications take this colour for their border, accent and
+# progress fill.
 # critical = "#F7768E"
 
-# Low-urgency Notifications fade their text and accent to this opacity, in
-# percent, so they don't compete for attention.
+# Low-urgency Notifications fade their text, accent and progress fill to
+# this opacity, in percent, so they don't compete for attention.
 # low_opacity = 60
+
+# The longest side of a Popup's icon or image, in pixels.
+# icon_size = 48
+
+# The icon theme app icons are looked up in, by its directory name under
+# /usr/share/icons or ~/.local/share/icons. Empty uses your GTK icon theme
+# (gtk-icon-theme-name in ~/.config/gtk-3.0/settings.ini), else hicolor.
+# icon_theme = ""
+
+# [[rule]]
+#
+# Rules change the Theme or the timeout of the Notifications they match. Each
+# matches on `app_name` (exact, ignoring case) and/or `urgency` ("low",
+# "normal" or "critical"); a Rule with neither matches everything. Matching
+# Rules apply in file order on top of [theme], so a later Rule wins. Their
+# `theme` takes any [theme] setting, `preset` included, and the urgency styles
+# are applied after it: to recolour critical Notifications, set `critical`.
+#
+# `timeout`, in milliseconds, replaces both [general] `timeout` and the app's
+# own request. Critical Notifications still never expire.
+#
+# Lucent ships with no Rules. For example:
+#
+#   [[rule]]
+#   app_name = "Spotify"
+#   timeout = 3000
+#   theme = { summary_size = 13, accent = "#1DB954" }
+#
+#   [[rule]]
+#   urgency = "critical"
+#   theme = { critical = "#FF9E64", border_width = 2 }

@@ -2,9 +2,9 @@
 //! that fill it in.
 //!
 //! A Theme is resolved in layers, each overriding only the fields it sets:
-//! the chosen Preset, then the `[theme]` overrides, then the Urgency style.
-//! [`ThemeOverride`] is that "only the fields it sets" layer, so anything
-//! else that tweaks a Theme (a Rule, say) reuses it.
+//! the chosen Preset, then the `[theme]` overrides, then each matching Rule,
+//! then the Urgency style. [`ThemeOverride`] is that "only the fields it
+//! sets" layer, shared by `[theme]` and every Rule.
 //!
 //! Lucent draws no shadows or glows (ADR-0001): there are no fields for them.
 
@@ -40,7 +40,7 @@ impl Rgba {
     }
 
     /// The same colour with its alpha scaled by `percent`.
-    fn faded(self, percent: u8) -> Self {
+    pub fn faded(self, percent: u8) -> Self {
         let a = (u16::from(self.a) * u16::from(percent.min(100)) + 50) / 100;
         Self { a: a as u8, ..self }
     }
@@ -178,10 +178,19 @@ theme_fields! {
     accent: Rgba,
     /// Width of the accent line, in pixels; 0 draws none.
     accent_width: u32,
-    /// Border and accent of critical Notifications.
+    /// The progress bar's empty track.
+    progress_track: Rgba,
+    /// The progress bar's filled part.
+    progress_fill: Rgba,
+    /// Border, accent and progress fill of critical Notifications.
     critical: Rgba,
-    /// How visible low-urgency text and accent are, in percent.
+    /// How visible low-urgency text, accent and progress fill are, in percent.
     low_opacity: u8,
+    /// The longest side of a Popup's icon or image, in pixels.
+    icon_size: u32,
+    /// The freedesktop icon theme app icons are looked up in; empty means
+    /// the GTK icon theme, else `hicolor`.
+    icon_theme: String,
 }
 
 impl Theme {
@@ -204,8 +213,12 @@ impl Theme {
             body: Rgba::hex(0xA9B1D6, 1.0),
             accent: Rgba::hex(0x8DE3DC, 1.0),
             accent_width: 3,
+            progress_track: Rgba::new(252, 253, 253, alpha_byte(0.12)),
+            progress_fill: Rgba::hex(0x8DE3DC, 1.0),
             critical: Rgba::hex(0xF7768E, 1.0),
             low_opacity: 60,
+            icon_size: 48,
+            icon_theme: String::new(),
         }
     }
 
@@ -219,6 +232,8 @@ impl Theme {
             summary: Rgba::hex(0x343B58, 1.0),
             body: Rgba::hex(0x565A6E, 1.0),
             accent: Rgba::hex(0x118C74, 1.0),
+            progress_track: Rgba::new(15, 20, 40, alpha_byte(0.10)),
+            progress_fill: Rgba::hex(0x118C74, 1.0),
             critical: Rgba::hex(0xF52A65, 1.0),
             ..Self::midnight_bloom()
         }
@@ -250,8 +265,9 @@ impl Theme {
     }
 
     /// This Theme as worn by a Notification of `urgency`.
-    /// Critical takes the `critical` colour for its border and accent; low
-    /// fades its text and accent to `low_opacity`.
+    /// Critical takes the `critical` colour for its border, accent and
+    /// progress fill; low fades its text, accent and progress fill to
+    /// `low_opacity`.
     pub fn for_urgency(mut self, urgency: Urgency) -> Self {
         match urgency {
             Urgency::Low => {
@@ -261,6 +277,7 @@ impl Theme {
                     &mut self.summary,
                     &mut self.body,
                     &mut self.accent,
+                    &mut self.progress_fill,
                 ] {
                     *colour = colour.faded(percent);
                 }
@@ -270,6 +287,7 @@ impl Theme {
                 self.border = self.critical;
                 self.border_top = self.critical;
                 self.accent = self.critical;
+                self.progress_fill = self.critical;
             }
         }
         self

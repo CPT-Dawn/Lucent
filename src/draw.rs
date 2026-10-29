@@ -11,12 +11,30 @@ use crate::core::Popup;
 use crate::theme::Rgba;
 
 const LINE_GAP: f64 = 4.0;
+/// Thickness of the progress bar, in pixels.
+const BAR_HEIGHT: f64 = 6.0;
+/// Space between the icon and the text beside it.
+const ICON_GAP: f64 = 12.0;
+
+/// Where the text starts: beside the icon if there is one.
+fn text_left(popup: &Popup, icon: Option<&ImageSurface>) -> f64 {
+    let padding = f64::from(popup.theme.padding);
+    icon.map_or(padding, |icon| padding + icon.width() as f64 + ICON_GAP)
+}
+/// Action buttons: at most this many share a row; more wrap below.
+const BUTTONS_PER_ROW: usize = 3;
+const BUTTON_HEIGHT: f64 = 28.0;
+const BUTTON_GAP: f64 = 8.0;
+const BUTTON_RADIUS: f64 = 10.0;
+const BUTTON_PADDING: f64 = 8.0;
+/// How strongly a resting button is filled, in percent of the summary colour.
+const BUTTON_WASH: u8 = 10;
 
 /// The text blocks of a Popup, top to bottom, with their colours.
-fn layouts(cr: &Context, popup: &Popup, width: u32) -> Vec<(Layout, Rgba)> {
+fn layouts(cr: &Context, popup: &Popup, left: f64, width: u32) -> Vec<(Layout, Rgba)> {
     let theme = &popup.theme;
     let padding = f64::from(theme.padding);
-    let text_width = ((width as f64 - 2.0 * padding).max(0.0) * pango::SCALE as f64) as i32;
+    let text_width = ((width as f64 - left - padding).max(0.0) * pango::SCALE as f64) as i32;
     let block = |style: &str, size: u32, max_lines: i32| {
         let layout = pangocairo::functions::create_layout(cr);
         layout.set_font_description(Some(&FontDescription::from_string(&format!(
@@ -84,17 +102,105 @@ fn content_height(blocks: &[(Layout, Rgba)]) -> f64 {
     text + LINE_GAP * blocks.len().saturating_sub(1) as f64
 }
 
-/// The height a Popup needs at `width`, in surface pixels.
-pub fn measure(popup: &Popup, width: u32) -> u32 {
-    let height = ImageSurface::create(Format::ARgb32, 1, 1)
-        .and_then(|s| Context::new(&s))
-        .map(|cr| content_height(&layouts(&cr, popup, width)))
-        .unwrap_or(0.0);
-    (height + 2.0 * f64::from(popup.theme.padding)).ceil() as u32
+/// The room a Popup's progress bar takes, gap included; none without one.
+fn bar_room(popup: &Popup) -> f64 {
+    if popup.value.is_some() {
+        BAR_HEIGHT + LINE_GAP
+    } else {
+        0.0
+    }
 }
 
-/// Paints the whole Popup over every pixel of `cr`'s `width`×`height` target.
-pub fn paint(cr: &Context, popup: &Popup, width: u32, height: u32) -> Result<(), cairo::Error> {
+/// A rectangle in surface pixels, from the Popup's top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Rect {
+    /// Whether (`x`, `y`) lies inside, counting the top and left edges.
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        (self.x..self.x + self.width).contains(&x) && (self.y..self.y + self.height).contains(&y)
+    }
+}
+
+/// The height of the Popup's body: its text and progress bar, or its icon
+/// beside them if that is taller.
+fn body_height(text: &[(Layout, Rgba)], popup: &Popup, icon: Option<&ImageSurface>) -> f64 {
+    let text = content_height(text) + bar_room(popup);
+    text.max(icon.map_or(0.0, |icon| icon.height() as f64))
+}
+
+/// The height of the Popup's body at `width`, laid out on a scratch surface.
+fn measure_body(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> f64 {
+    ImageSurface::create(Format::ARgb32, 1, 1)
+        .and_then(|s| Context::new(&s))
+        .map(|cr| {
+            let blocks = layouts(&cr, popup, text_left(popup, icon), width);
+            body_height(&blocks, popup, icon)
+        })
+        .unwrap_or(0.0)
+}
+
+/// Lays out `count` buttons below a body `body_height` tall, inset by
+/// `padding`: rows of up to [`BUTTONS_PER_ROW`], each row's buttons sharing
+/// the full inner width equally, under the icon as well as the text.
+fn button_rects(count: usize, body_height: f64, width: u32, padding: f64) -> Vec<Rect> {
+    let inner = (width as f64 - 2.0 * padding).max(0.0);
+    let top = padding + body_height + BUTTON_GAP;
+    (0..count)
+        .map(|i| {
+            let row = i / BUTTONS_PER_ROW;
+            let in_row = (count - row * BUTTONS_PER_ROW).min(BUTTONS_PER_ROW) as f64;
+            let column = (i % BUTTONS_PER_ROW) as f64;
+            let w = ((inner - BUTTON_GAP * (in_row - 1.0)) / in_row).max(0.0);
+            Rect {
+                x: padding + column * (w + BUTTON_GAP),
+                y: top + row as f64 * (BUTTON_HEIGHT + BUTTON_GAP),
+                width: w,
+                height: BUTTON_HEIGHT,
+            }
+        })
+        .collect()
+}
+
+/// Where each of the Popup's Action buttons sits at `width`, in order.
+pub fn buttons(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> Vec<Rect> {
+    if popup.actions.is_empty() {
+        return Vec::new();
+    }
+    let padding = f64::from(popup.theme.padding);
+    button_rects(
+        popup.actions.len(),
+        measure_body(popup, icon, width),
+        width,
+        padding,
+    )
+}
+
+/// The height a Popup with `icon` needs at `width`, in surface pixels.
+pub fn measure(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> u32 {
+    let padding = f64::from(popup.theme.padding);
+    let body = measure_body(popup, icon, width);
+    let bottom = button_rects(popup.actions.len(), body, width, padding)
+        .last()
+        .map_or(padding + body, |b| b.y + b.height);
+    (bottom + padding).ceil() as u32
+}
+
+/// Paints the whole Popup over every pixel of `cr`'s `width`×`height` target,
+/// with the Action button at index `hovered` in the accent colour.
+pub fn paint(
+    cr: &Context,
+    popup: &Popup,
+    icon: Option<&ImageSurface>,
+    width: u32,
+    height: u32,
+    hovered: Option<usize>,
+) -> Result<(), cairo::Error> {
     let (w, h) = (width as f64, height as f64);
     let theme = &popup.theme;
     let padding = f64::from(theme.padding);
@@ -136,14 +242,101 @@ pub fn paint(cr: &Context, popup: &Popup, width: u32, height: u32) -> Result<(),
         cr.fill()?;
     }
 
+    if let Some(icon) = icon {
+        cr.set_source_surface(icon, padding, padding)?;
+        cr.paint()?;
+    }
+
+    let left = text_left(popup, icon);
+    let blocks = layouts(cr, popup, left, width);
+    // The bar sits under the text, above any "+N more" hint.
+    let bar_at = blocks.len() - usize::from(popup.more > 0);
     let mut y = padding;
-    for (layout, colour) in layouts(cr, popup, width) {
-        cr.move_to(padding, y);
-        set_source(cr, colour);
-        pangocairo::functions::show_layout(cr, &layout);
+    for (i, (layout, colour)) in blocks.iter().enumerate() {
+        if i == bar_at {
+            y += progress_bar(cr, popup, left, y, w)?;
+        }
+        cr.move_to(left, y);
+        set_source(cr, *colour);
+        pangocairo::functions::show_layout(cr, layout);
         y += layout.pixel_extents().1.height() as f64 + LINE_GAP;
     }
+    if bar_at == blocks.len() {
+        progress_bar(cr, popup, left, y, w)?;
+    }
+
+    let body = body_height(&blocks, popup, icon);
+    let rects = button_rects(popup.actions.len(), body, width, padding);
+    let button_radius = BUTTON_RADIUS.min(f64::from(theme.radius));
+    for (index, (action, rect)) in popup.actions.iter().zip(&rects).enumerate() {
+        // Resting buttons are a faint wash of the summary colour, so they
+        // suit light and dark Themes alike; the hovered one takes the
+        // accent, its label the background made opaque.
+        let (fill, text) = if hovered == Some(index) {
+            (
+                theme.accent,
+                Rgba {
+                    a: 255,
+                    ..theme.background
+                },
+            )
+        } else {
+            (theme.summary.faded(BUTTON_WASH), theme.summary)
+        };
+        rounded_rect(cr, rect.x, rect.y, rect.width, rect.height, button_radius);
+        set_source(cr, fill);
+        cr.fill()?;
+
+        // One line, centred, cut with an ellipsis when it does not fit.
+        let label = pangocairo::functions::create_layout(cr);
+        label.set_font_description(Some(&FontDescription::from_string(&format!(
+            "{} Medium {}",
+            theme.font, theme.app_name_size
+        ))));
+        let label_width = (rect.width - 2.0 * BUTTON_PADDING).max(0.0);
+        label.set_width((label_width * pango::SCALE as f64) as i32);
+        label.set_ellipsize(EllipsizeMode::End);
+        label.set_single_paragraph_mode(true);
+        label.set_alignment(pango::Alignment::Center);
+        label.set_text(&action.label);
+        let label_height = label.pixel_extents().1.height() as f64;
+        cr.move_to(
+            rect.x + BUTTON_PADDING,
+            rect.y + (rect.height - label_height) / 2.0,
+        );
+        set_source(cr, text);
+        pangocairo::functions::show_layout(cr, &label);
+    }
     Ok(())
+}
+
+/// Paints the Popup's progress bar, if it has one, as a pill-shaped track
+/// at `y` across the text column from `left`, filled in from the left;
+/// returns the room it took.
+fn progress_bar(
+    cr: &Context,
+    popup: &Popup,
+    left: f64,
+    y: f64,
+    w: f64,
+) -> Result<f64, cairo::Error> {
+    let Some(value) = popup.value else {
+        return Ok(0.0);
+    };
+    let theme = &popup.theme;
+    let padding = f64::from(theme.padding);
+    let width = (w - left - padding).max(0.0);
+    cr.save()?;
+    rounded_rect(cr, left, y, width, BAR_HEIGHT, BAR_HEIGHT / 2.0);
+    set_source(cr, theme.progress_track);
+    cr.fill_preserve()?;
+    // Clip to the pill so even a sliver of fill keeps its rounded end.
+    cr.clip();
+    cr.rectangle(left, y, width * f64::from(value) / 100.0, BAR_HEIGHT);
+    set_source(cr, theme.progress_fill);
+    cr.fill()?;
+    cr.restore()?;
+    Ok(bar_room(popup))
 }
 
 fn set_source(cr: &Context, colour: Rgba) {

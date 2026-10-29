@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use lucent::config::Config;
 use lucent::core::{Button, CloseReason, Core, Effect, Event, Notification, Popup};
+use lucent::image::Image;
 use lucent::theme::Theme;
 
 fn hello() -> Notification {
@@ -32,9 +33,12 @@ fn notify_shows_a_popup_that_expires_after_the_default_timeout() {
                 app_name: "notify-send".into(),
                 summary: "Hello".into(),
                 body: "World".into(),
+                image: None,
+                actions: vec![],
                 more: 0,
                 body_lines: 4,
                 expire: Some(Duration::from_secs(5)),
+                value: None,
                 theme: Theme::default(),
             }]),
             Effect::StartTimer {
@@ -271,6 +275,48 @@ fn the_configured_max_visible_caps_the_stack() {
     let effects = core.handle(Event::Notify(titled("b")));
 
     assert_eq!(last_stack(&effects), stack(&[("a", 1)]));
+}
+
+fn with_icon(n: Notification, icon: &str) -> Notification {
+    Notification {
+        image: Some(Image::Icon(icon.into())),
+        ..n
+    }
+}
+
+/// The image of each Popup in the last Stack in `effects`.
+fn last_images(effects: &[Effect]) -> Vec<Option<Image>> {
+    effects
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            Effect::Stack(popups) => Some(popups.iter().map(|p| p.image.clone()).collect()),
+            _ => None,
+        })
+        .expect("effects should include a Stack")
+}
+
+#[test]
+fn a_popup_shows_its_notifications_image_and_a_replacement_swaps_it() {
+    let mut core = Core::new();
+    let effects = core.handle(Event::Notify(with_icon(hello(), "mail-unread")));
+    let id = match effects.first() {
+        Some(Effect::Accepted(id)) => *id,
+        other => panic!("expected an id, got {other:?}"),
+    };
+    assert_eq!(
+        last_images(&effects),
+        [Some(Image::Icon("mail-unread".into()))]
+    );
+
+    let effects = core.handle(Event::Notify(with_icon(replacing(id, "read"), "mail-read")));
+    assert_eq!(
+        last_images(&effects),
+        [Some(Image::Icon("mail-read".into()))]
+    );
+
+    let effects = core.handle(Event::Notify(replacing(id, "no icon")));
+    assert_eq!(last_images(&effects), [None]);
 }
 
 fn idle_core(text: &str) -> Core {

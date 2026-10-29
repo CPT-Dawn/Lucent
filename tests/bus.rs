@@ -224,7 +224,16 @@ fn reports_server_information_and_capabilities_and_accepts_notify() {
     let (caps,): (Vec<String>,) = notifications(&client)
         .method_call(NAME, "GetCapabilities", ())
         .unwrap();
-    assert_eq!(caps, ["body", "body-hyperlinks", "body-markup"]);
+    assert_eq!(
+        caps,
+        [
+            "actions",
+            "body",
+            "body-hyperlinks",
+            "body-markup",
+            "icon-static"
+        ]
+    );
 
     let first = notify(&client, "Hello", "World");
     let second = notify(&client, "Hello", "again");
@@ -338,6 +347,45 @@ fn logs_only_errors_by_default_and_everything_with_lucent_log_debug() {
             assert!(stderr.is_empty(), "default log should be quiet: {stderr}");
         }
     }
+}
+
+#[test]
+fn an_image_data_hint_survives_the_wire() {
+    let bus = Bus::new();
+    let client = bus.client();
+    let mut child = bus
+        .lucent_command()
+        .env("LUCENT_LOG", "debug")
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    while !name_has_owner(&client, NAME) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut hints = PropMap::new();
+    let pixels = (2i32, 1i32, 6i32, false, 8i32, 3i32, vec![0u8; 6]);
+    hints.insert("image-data".into(), dbus::arg::Variant(Box::new(pixels)));
+    let (_id,): (u32,) = notifications(&client)
+        .method_call(
+            NAME,
+            "Notify",
+            (
+                "test-app",
+                0u32,
+                "firefox",
+                "Look",
+                "",
+                Vec::<String>::new(),
+                hints,
+                -1i32,
+            ),
+        )
+        .unwrap();
+    child.kill().unwrap();
+    let stderr = String::from_utf8_lossy(&child.wait_with_output().unwrap().stderr).into_owned();
+
+    assert!(stderr.contains("Pixels(2x1)"), "debug log: {stderr}");
 }
 
 #[test]
@@ -596,6 +644,68 @@ fn clicking_a_notification_with_a_default_action_invokes_it_then_dismisses() {
         signals,
         [
             format!("ActionInvoked({id}, default)"),
+            format!("NotificationClosed({id}, 2)"),
+        ]
+    );
+}
+
+#[test]
+fn pressing_an_action_button_invokes_its_key_then_dismisses() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+    listen_for_closed(&client);
+    client
+        .add_match_no_cb(&MatchRule::new_signal(NAME, "ActionInvoked").match_str())
+        .unwrap();
+
+    let (id,): (u32,) = notifications(&client)
+        .method_call(
+            NAME,
+            "Notify",
+            (
+                "mail",
+                0u32,
+                "",
+                "New mail",
+                "",
+                vec!["default", "Open", "reply", "Reply"],
+                PropMap::new(),
+                -1i32,
+            ),
+        )
+        .unwrap();
+    // With drawing off there are no buttons; this test-only call stands in.
+    let () = notifications(&client)
+        .method_call("dev.cptdawn.Lucent.Test", "InvokeAction", (id, "reply"))
+        .unwrap();
+
+    let mut signals = Vec::new();
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(500) {
+        let Some(msg) = client
+            .channel()
+            .blocking_pop_message(Duration::from_millis(50))
+            .unwrap()
+        else {
+            continue;
+        };
+        match msg.member().as_deref() {
+            Some("ActionInvoked") => {
+                let (id, key) = msg.read2::<u32, String>().unwrap();
+                signals.push(format!("ActionInvoked({id}, {key})"));
+            }
+            Some("NotificationClosed") => {
+                let (id, reason) = msg.read2::<u32, u32>().unwrap();
+                signals.push(format!("NotificationClosed({id}, {reason})"));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        signals,
+        [
+            format!("ActionInvoked({id}, reply)"),
             format!("NotificationClosed({id}, 2)"),
         ]
     );

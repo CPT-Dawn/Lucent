@@ -18,7 +18,7 @@ use dbus::channel::{BusType, Channel};
 use dbus::message::MessageType;
 
 use crate::core::{Action, Button, CloseReason, Effect, Event, Notification, Timeout, Urgency};
-use crate::debug;
+use crate::{debug, image};
 
 pub const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
@@ -28,7 +28,13 @@ const PATH: &str = "/org/freedesktop/Notifications";
 const TEST_INTERFACE: &str = "dev.cptdawn.Lucent.Test";
 
 /// Capabilities are added only in the change that implements them.
-const CAPABILITIES: [&str; 3] = ["body", "body-hyperlinks", "body-markup"];
+const CAPABILITIES: [&str; 5] = [
+    "actions",
+    "body",
+    "body-hyperlinks",
+    "body-markup",
+    "icon-static",
+];
 
 /// The session bus went away; nothing more can be served.
 #[derive(Debug)]
@@ -52,7 +58,8 @@ impl DbusAdapter {
     }
 
     /// Serves [`TEST_INTERFACE`]: `Click(u id, s button)` with `left`,
-    /// `middle` or `right` acts as a pointer press on that Popup.
+    /// `middle` or `right` acts as a pointer press on that Popup, and
+    /// `InvokeAction(u id, s key)` as a press on its button for Action `key`.
     pub fn enable_test_hooks(&mut self) {
         self.test_hooks = true;
     }
@@ -208,7 +215,7 @@ impl DbusAdapter {
 
 fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
     // Signature susssasa{sv}i. The fields not used yet arrive with their tickets.
-    let (app_name, replaces_id, _app_icon, summary, body, actions, hints, timeout): (
+    let (app_name, replaces_id, app_icon, summary, body, actions, hints, timeout): (
         String,
         u32,
         String,
@@ -218,8 +225,10 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
         PropMap,
         i32,
     ) = msg.read_all()?;
-    debug!("Notify from {app_name:?}: {summary:?}");
+    let image = image::from_hints(&app_icon, &hints);
+    debug!("Notify from {app_name:?}: {summary:?}, image {image:?}");
     Ok(Notification {
+        image,
         app_name,
         summary,
         body,
@@ -236,6 +245,8 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
             .collect(),
         urgency: urgency(&hints),
         timeout: Timeout::from_millis(timeout),
+        // Progress in percent, an int32 by the spec; any integer will do.
+        value: hints.get("value").and_then(|v| v.0.as_i64()),
     })
 }
 
@@ -244,22 +255,39 @@ fn test_hook(
     handle: &mut impl FnMut(Event) -> Vec<Effect>,
     pending: &mut Vec<Effect>,
 ) -> Message {
-    if msg.member().as_deref() != Some("Click") {
-        return unknown_method(msg);
-    }
-    let button = match msg.read2::<u32, &str>() {
-        Ok((id, "left")) => (id, Button::Left),
-        Ok((id, "middle")) => (id, Button::Middle),
-        Ok((id, "right")) => (id, Button::Right),
-        _ => {
-            return msg.error(
-                &"org.freedesktop.DBus.Error.InvalidArgs".into(),
-                c"expected (u id, s left|middle|right)",
-            );
-        }
+    let event = match msg.member().as_deref() {
+        Some("Click") => match msg.read2::<u32, &str>() {
+            Ok((id, "left")) => Event::Click {
+                id,
+                button: Button::Left,
+            },
+            Ok((id, "middle")) => Event::Click {
+                id,
+                button: Button::Middle,
+            },
+            Ok((id, "right")) => Event::Click {
+                id,
+                button: Button::Right,
+            },
+            _ => {
+                return msg.error(
+                    &"org.freedesktop.DBus.Error.InvalidArgs".into(),
+                    c"expected (u id, s left|middle|right)",
+                );
+            }
+        },
+        Some("InvokeAction") => match msg.read2::<u32, String>() {
+            Ok((id, key)) => Event::InvokeAction { id, key },
+            Err(_) => {
+                return msg.error(
+                    &"org.freedesktop.DBus.Error.InvalidArgs".into(),
+                    c"expected (u id, s key)",
+                );
+            }
+        },
+        _ => return unknown_method(msg),
     };
-    let (id, button) = button;
-    pending.extend(handle(Event::Click { id, button }));
+    pending.extend(handle(event));
     msg.method_return()
 }
 

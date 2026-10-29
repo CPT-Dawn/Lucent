@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::config::{ClickAction, Config};
+use crate::image::Image;
 use crate::markup;
 use crate::theme::Theme;
 
@@ -26,6 +27,10 @@ pub struct Notification {
     pub urgency: Urgency,
     /// How long the sender asked for the Popup to stay up.
     pub timeout: Timeout,
+    /// The `value` hint, as sent: progress in percent, unchecked.
+    pub value: Option<i64>,
+    /// The image chosen from `app_icon` and the image hints.
+    pub image: Option<Image>,
 }
 
 /// A labelled choice the sender offers; the key is reported back when it is
@@ -48,7 +53,8 @@ pub enum Button {
 }
 
 /// The sender-declared importance of a Notification.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Urgency {
     Low,
     #[default]
@@ -97,6 +103,10 @@ pub struct Popup {
     pub app_name: String,
     pub summary: String,
     pub body: String,
+    pub image: Option<Image>,
+    /// The Actions to show as buttons, in the sender's order. The Default
+    /// action is never among them: clicking the Popup itself runs that.
+    pub actions: Vec<Action>,
     /// Notifications waiting in the Queue, shown as a "+N more" hint. Only the
     /// last Popup of the Stack carries a non-zero count.
     pub more: usize,
@@ -104,6 +114,8 @@ pub struct Popup {
     pub body_lines: u32,
     /// How long the Popup stays up once shown; `None` until closed.
     pub expire: Option<Duration>,
+    /// Progress to show as a bar, in percent (0–100); `None` shows none.
+    pub value: Option<u8>,
     /// The Theme to draw this Popup with, resolved for its Urgency.
     pub theme: Theme,
 }
@@ -136,6 +148,11 @@ pub enum Event {
         id: u32,
         button: Button,
     },
+    /// The user pressed the button for the Action `key` on this Popup.
+    InvokeAction {
+        id: u32,
+        key: String,
+    },
     /// The pointer moved onto this Notification's Popup.
     HoverStart(u32),
     /// The pointer left this Notification's Popup.
@@ -164,6 +181,20 @@ pub enum Effect {
     Exit,
     /// Emit `ActionInvoked` for `id` with the Action's `key`.
     ActionInvoked { id: u32, key: String },
+}
+
+/// The `value` hint as a percentage, clamped to 0–100.
+fn progress(value: Option<i64>) -> Option<u8> {
+    value.map(|v| v.clamp(0, 100) as u8)
+}
+
+/// The Actions that become buttons: all but the Default action.
+fn buttons(actions: &[Action]) -> Vec<Action> {
+    actions
+        .iter()
+        .filter(|a| a.key != DEFAULT_ACTION)
+        .cloned()
+        .collect()
 }
 
 /// Where a visible Popup's timeout stands.
@@ -278,6 +309,7 @@ impl Core {
             Event::Started => self.arm_idle().into_iter().collect(),
             Event::IdleTimerFired => self.idle_elapsed(),
             Event::Click { id, button } => self.click(id, button),
+            Event::InvokeAction { id, key } => self.invoke_action(id, key),
             Event::HoverStart(id) => self.hover_start(id),
             Event::HoverEnd(id) => self.hover_end(id),
         }
@@ -311,17 +343,21 @@ impl Core {
         self.last_id = self.last_id.wrapping_add(1).max(1);
         let id = self.last_id;
         let expire = self.expiry(&n);
-        self.set_actions(id, n.actions);
+        let theme = self.theme(&n);
         let popup = Popup {
             id,
             app_name: n.app_name,
             summary: n.summary,
             body: markup::clean(&n.body),
+            image: n.image,
+            actions: buttons(&n.actions),
             more: 0,
             body_lines: self.config.general.body_lines,
             expire,
-            theme: self.theme(n.urgency),
+            value: progress(n.value),
+            theme,
         };
+        self.set_actions(id, n.actions);
         if self.stack.len() >= self.max_visible {
             self.queue.push_back(popup);
             return vec![Effect::Accepted(id), self.stack_effect()];
@@ -333,11 +369,14 @@ impl Core {
     }
 
     /// How long a Notification stays up once shown: never for critical ones,
-    /// otherwise what the sender asked unless the config says to ignore it.
+    /// otherwise a matching Rule's timeout, else what the sender asked unless
+    /// the config says to ignore it.
     fn expiry(&self, n: &Notification) -> Option<Duration> {
         let general = &self.config.general;
+        let rule = self.config.rule_timeout(&n.app_name, n.urgency);
         match (n.urgency, n.timeout) {
             (Urgency::Critical, _) => None,
+            _ if rule.is_some() => rule,
             (_, Timeout::Never) if general.honor_app_timeouts => None,
             (_, Timeout::After(after)) if general.honor_app_timeouts => Some(after),
             _ => Some(general.timeout),
@@ -349,12 +388,15 @@ impl Core {
     fn replace(&mut self, n: &Notification) -> Option<Vec<Effect>> {
         let id = n.replaces_id;
         let expire = self.expiry(n);
-        let theme = self.theme(n.urgency);
+        let theme = self.theme(n);
         let update = |p: &mut Popup| {
             p.app_name.clone_from(&n.app_name);
             p.summary.clone_from(&n.summary);
             p.body = markup::clean(&n.body);
+            p.image.clone_from(&n.image);
+            p.actions = buttons(&n.actions);
             p.expire = expire;
+            p.value = progress(n.value);
             p.theme.clone_from(&theme);
         };
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
@@ -418,6 +460,21 @@ impl Core {
             ClickAction::DismissAll => return self.dismiss_all(),
             ClickAction::None => return vec![],
         }
+        self.remove(id, CloseReason::Dismissed, effects)
+    }
+
+    /// Runs one of a shown Popup's Actions, then dismisses it. A key the
+    /// Notification does not offer does nothing.
+    fn invoke_action(&mut self, id: u32, key: String) -> Vec<Effect> {
+        let offered = self.stack.iter().any(|p| p.id == id)
+            && self
+                .actions
+                .get(&id)
+                .is_some_and(|a| a.iter().any(|a| a.key == key));
+        if !offered {
+            return vec![];
+        }
+        let effects = vec![Effect::CancelTimer(id), Effect::ActionInvoked { id, key }];
         self.remove(id, CloseReason::Dismissed, effects)
     }
 
@@ -510,9 +567,9 @@ impl Core {
         effects
     }
 
-    /// The Theme for a Notification of `urgency`.
-    fn theme(&self, urgency: Urgency) -> Theme {
-        self.config.theme().for_urgency(urgency)
+    /// The Theme for `n`, Rules and Urgency style included.
+    fn theme(&self, n: &Notification) -> Theme {
+        self.config.theme_for(&n.app_name, n.urgency)
     }
 
     /// The Stack as the renderer should show it, "+N more" on the last slot.
