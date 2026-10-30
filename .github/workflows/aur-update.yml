@@ -84,7 +84,7 @@ jobs:
           GITHUB_REF_NAME: ${{ env.AUR_RELEASE_TAG }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
-          AUR_MAINTAINER: CPT-Dawn <dev@cptdawn.dev>
+          AUR_MAINTAINER: CPT-Dawn <ping@cptdawn.dev>
           PKGREL: "1"
         run: |
           set -euo pipefail

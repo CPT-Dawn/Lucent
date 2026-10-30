@@ -16,7 +16,7 @@ pkgname="lucent"
 _reponame="Lucent"
 pkgver="${release_tag#v}"
 pkgrel="${PKGREL:-1}"
-maintainer="${AUR_MAINTAINER:-CPT-Dawn <dev@cptdawn.dev>}"
+maintainer="${AUR_MAINTAINER:-CPT-Dawn <ping@cptdawn.dev>}"
 repo="${GITHUB_REPOSITORY:-CPT-Dawn/Lucent}"
 server_url="${GITHUB_SERVER_URL:-https://github.com}"
 
