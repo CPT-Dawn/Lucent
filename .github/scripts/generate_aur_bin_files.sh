@@ -56,8 +56,9 @@ license=('MIT')
 depends=('cairo' 'pango' 'glib2' 'dbus' 'libgcc' 'glibc')
 provides=("\${_pkgname}=\${pkgver}")
 conflicts=("\${_pkgname}")
-# Upstream already strips the binary; leave it byte-for-byte as released.
-options=('!strip')
+# Upstream already strips the binary: ship it byte-for-byte, with no empty
+# debug package.
+options=('!strip' '!debug')
 source_x86_64=("\${url}/releases/download/v\${pkgver}/\${_pkgname}-\${pkgver}-x86_64.tar.gz")
 source_aarch64=("\${url}/releases/download/v\${pkgver}/\${_pkgname}-\${pkgver}-aarch64.tar.gz")
 sha256sums_x86_64=('${sums[x86_64]}')
