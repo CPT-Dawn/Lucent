@@ -1,0 +1,232 @@
+name: Release binaries
+
+# Builds the release tarballs, attaches them to the GitHub Release, then
+# publishes lucent-bin to the AUR from those exact assets.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (example: v1.0.0)"
+        required: true
+      pkgrel:
+        description: "AUR pkgrel (bump to rebuild the same version)"
+        required: false
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-bin-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      # Packaging scripts come from the workflow's own commit, so older tags
+      # that predate them can still be (re)released.
+      - name: Checkout release scripts
+        uses: actions/checkout@v7
+        with:
+          path: .ci
+          sparse-checkout: .github/scripts
+
+      - name: Check tag matches Cargo.toml
+        run: |
+          set -euo pipefail
+          version="$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)"
+          if [[ "v$version" != "$RELEASE_TAG" ]]; then
+            echo "Tag $RELEASE_TAG does not match Cargo.toml version $version." >&2
+            exit 1
+          fi
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libcairo2-dev libpango1.0-dev libdbus-1-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Same flags as the source AUR package: packed relocations need glibc
+      # 2.36+, which every target here has.
+      - name: Build
+        env:
+          RUSTFLAGS: -C link-arg=-Wl,-z,pack-relative-relocs
+        run: cargo build --release --locked
+
+      # The AUR depends array is written from this list. A new library here
+      # means lucent-bin would install without it, so stop the release.
+      - name: Check linked libraries
+        run: |
+          set -euo pipefail
+          allowed='libpangocairo-1.0.so.0 libpango-1.0.so.0 libcairo.so.2
+            libgobject-2.0.so.0 libglib-2.0.so.0 libdbus-1.so.3
+            libgcc_s.so.1 libm.so.6 libc.so.6 ld-linux-x86-64.so.2
+            ld-linux-aarch64.so.1'
+          readelf -d target/release/lucent | awk -F'[][]' '/NEEDED/{print $2}' \
+            | tee /dev/stderr | while read -r lib; do
+              grep -qw -- "$lib" <<< "$allowed" \
+                || { echo "Unexpected NEEDED library: $lib" >&2; exit 1; }
+            done
+
+      - name: Smoke test
+        run: ./target/release/lucent --default-config | grep -q '^\['
+
+      - name: Package
+        run: .ci/.github/scripts/package_release.sh "$RELEASE_TAG" "${{ matrix.arch }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: lucent-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Attach to release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: lucent-*
+          merge-multiple: true
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c ./*.sha256
+          gh release upload "$RELEASE_TAG" ./* --clobber --repo "$GITHUB_REPOSITORY"
+
+  aur-bin:
+    name: Publish lucent-bin
+    needs: publish
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install tools
+        run: |
+          pacman -Syu --noconfirm --needed git openssh namcap \
+            cairo pango glib2 dbus
+          useradd -m builder
+
+      - name: Checkout source repository
+        uses: actions/checkout@v7
+
+      - name: Configure SSH for AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # ssh reads the passwd home, not the $HOME Actions sets in containers.
+          ssh_dir="$(getent passwd "$(id -u)" | cut -d: -f6)/.ssh"
+          mkdir -p "$ssh_dir"
+
+          if [[ -z "$AUR_SSH_PRIVATE_KEY" ]]; then
+            echo "AUR_SSH_PRIVATE_KEY is empty." >&2
+            exit 1
+          fi
+
+          if grep -q "BEGIN .*PRIVATE KEY" <<< "$AUR_SSH_PRIVATE_KEY"; then
+            printf '%s\n' "$AUR_SSH_PRIVATE_KEY" | tr -d '\r' > "$ssh_dir/aur"
+          else
+            printf '%s' "$AUR_SSH_PRIVATE_KEY" | tr -d '\r\n' | base64 -d > "$ssh_dir/aur"
+          fi
+          chmod 600 "$ssh_dir/aur"
+
+          if ! ssh-keygen -y -f "$ssh_dir/aur" >/dev/null 2>&1; then
+            echo "Invalid private key in AUR_SSH_PRIVATE_KEY." >&2
+            exit 1
+          fi
+
+          ssh-keyscan -t rsa,ed25519 aur.archlinux.org >> "$ssh_dir/known_hosts"
+          cat > "$ssh_dir/config" << 'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Clone AUR repository
+        run: git clone ssh://aur@aur.archlinux.org/lucent-bin.git aur-repo
+
+      - name: Generate PKGBUILD
+        working-directory: aur-repo
+        env:
+          GITHUB_REF_NAME: ${{ env.RELEASE_TAG }}
+          AUR_MAINTAINER: CPT-Dawn <ping@cptdawn.dev>
+          PKGREL: ${{ inputs.pkgrel || '1' }}
+        run: bash ../.github/scripts/generate_aur_bin_files.sh
+
+      # makepkg refuses root, so build as an unprivileged user in a scratch
+      # copy. Writing .SRCINFO with makepkg keeps it in step with the PKGBUILD.
+      - name: Build, lint and write .SRCINFO
+        run: |
+          set -euo pipefail
+          build=/home/builder/build
+          install -d -o builder "$build"
+          install -o builder -m644 aur-repo/PKGBUILD "$build/PKGBUILD"
+          cd "$build"
+          su builder -c 'makepkg --printsrcinfo' > "$GITHUB_WORKSPACE/aur-repo/.SRCINFO"
+          su builder -c 'makepkg --noconfirm --cleanbuild'
+          pkg="$(su builder -c 'makepkg --packagelist')"
+          tar -tf "$pkg"
+          lint="$(namcap PKGBUILD "$pkg" | tee /dev/stderr)"
+          if grep -q ' E: ' <<< "$lint"; then
+            echo "namcap reported errors." >&2
+            exit 1
+          fi
+
+      - name: Commit and push AUR changes
+        working-directory: aur-repo
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "No PKGBUILD or .SRCINFO changes detected."
+            exit 0
+          fi
+
+          pkgver=$(awk -F= '/^pkgver=/{print $2}' PKGBUILD)
+          pkgrel=$(awk -F= '/^pkgrel=/{print $2}' PKGBUILD)
+          git commit -m "lucent-bin: update to ${pkgver}-${pkgrel}"
+          git push origin HEAD:master

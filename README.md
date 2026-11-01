@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/CPT-Dawn/Lucent/actions/workflows/ci.yml/badge.svg)](https://github.com/CPT-Dawn/Lucent/actions/workflows/ci.yml)
 [![AUR](https://img.shields.io/aur/version/lucent)](https://aur.archlinux.org/packages/lucent)
+[![AUR bin](https://img.shields.io/aur/version/lucent-bin?label=aur%20bin)](https://aur.archlinux.org/packages/lucent-bin)
 [![Rust 1.92+](https://img.shields.io/badge/Rust-1.92%2B-orange?logo=rust)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -55,7 +56,7 @@ Measured on 2026-10-30: Intel Core i7-13700HX, 31 GiB RAM, Linux
 | swaync | 0.12.6-1 | 615 KiB | 47.2 MiB | 0 | 309.1 MiB | 154.1 MiB | 226.4 ms | 40.0 ms |
 | fnott | 1.8.0-1 | 187 KiB | 14.6 MiB | 0 | 20.7 MiB | 7.0 MiB | 29.3 ms | 6.3 ms |
 
-[^size]: A plain `cargo build --release`. The AUR package links with packed
+[^size]: A plain `cargo build --release`. The AUR packages link with packed
     relocations and comes out about 120 KiB smaller.
 [^dunst]: Too good to be true. dunst attaches a buffer to its 24×24 cursor
     surface as it starts, about 31 ms before it draws the Popup, and the
@@ -86,13 +87,31 @@ What the table says, plainly:
 
 ## Install
 
-Arch Linux, from the AUR:
+Arch Linux, from the AUR. Pick one; they conflict with each other:
 
 ```sh
-paru -S lucent
+paru -S lucent       # builds from source (needs Rust, takes a minute or two)
+paru -S lucent-bin   # prebuilt release binary, x86_64 and aarch64
 ```
 
-Other distributions: see [Building from source](#building-from-source).
+Both install the same files. `lucent-bin` is built by CI from the release tag
+with the same flags as `lucent`, and its checksums are taken from the assets
+attached to the [GitHub release](https://github.com/CPT-Dawn/Lucent/releases).
+
+Other distributions: grab `lucent-<version>-<arch>.tar.gz` from the
+[latest release](https://github.com/CPT-Dawn/Lucent/releases/latest) (built
+on Ubuntu 24.04, so glibc 2.39 or newer, plus Cairo, Pango and D-Bus) and
+install it:
+
+```sh
+sha256sum -c lucent-*.tar.gz.sha256
+tar xzf lucent-*.tar.gz && cd lucent-*/
+sudo install -Dm755 lucent /usr/bin/lucent
+sudo install -Dm644 dev.cptdawn.Lucent.service \
+  /usr/share/dbus-1/services/dev.cptdawn.Lucent.service
+```
+
+Or [build from source](#building-from-source).
 
 ## That's it
 
