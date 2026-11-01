@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${GITHUB_REF_NAME:-}" ]]; then
-  echo "GITHUB_REF_NAME is required (example: v1.0.0)." >&2
+# RELEASE_TAG wins: on a manual run the runner forces GITHUB_REF_NAME to the
+# branch the workflow was dispatched from, whatever the step's env says.
+release_tag="${RELEASE_TAG:-${GITHUB_REF_NAME:-}}"
+if [[ -z "$release_tag" ]]; then
+  echo "RELEASE_TAG or GITHUB_REF_NAME is required (example: v1.0.0)." >&2
   exit 1
 fi
 
-release_tag="${GITHUB_REF_NAME}"
 if [[ "$release_tag" != v* ]]; then
   echo "Release tag must start with 'v' (received: $release_tag)." >&2
   exit 1

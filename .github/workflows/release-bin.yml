@@ -189,7 +189,6 @@ jobs:
       - name: Generate PKGBUILD
         working-directory: aur-repo
         env:
-          GITHUB_REF_NAME: ${{ env.RELEASE_TAG }}
           AUR_MAINTAINER: CPT-Dawn <ping@cptdawn.dev>
           PKGREL: ${{ inputs.pkgrel || '1' }}
         run: bash ../.github/scripts/generate_aur_bin_files.sh

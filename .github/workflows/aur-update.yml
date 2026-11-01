@@ -81,7 +81,7 @@ jobs:
         shell: bash
         working-directory: aur-repo
         env:
-          GITHUB_REF_NAME: ${{ env.AUR_RELEASE_TAG }}
+          RELEASE_TAG: ${{ env.AUR_RELEASE_TAG }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           AUR_MAINTAINER: CPT-Dawn <ping@cptdawn.dev>
