@@ -8,6 +8,10 @@ on:
       tag:
         description: "Release tag (example: v1.0.0)"
         required: true
+      pkgrel:
+        description: "AUR pkgrel (bump to republish the same version)"
+        required: false
+        default: "1"
 
 permissions:
   contents: read
@@ -85,7 +89,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           AUR_MAINTAINER: CPT-Dawn <ping@cptdawn.dev>
-          PKGREL: "1"
+          PKGREL: ${{ inputs.pkgrel || '1' }}
         run: |
           set -euo pipefail
           bash ../.github/scripts/generate_aur_files.sh
@@ -107,5 +111,6 @@ jobs:
           pkgver=$(awk -F= '/^pkgver=/{print $2}' PKGBUILD)
           pkgver=${pkgver// /}
 
-          git commit -m "lucent: update to ${pkgver}"
+          pkgrel=$(awk -F= '/^pkgrel=/{print $2}' PKGBUILD)
+          git commit -m "lucent: update to ${pkgver}-${pkgrel}"
           git push origin master

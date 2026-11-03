@@ -54,6 +54,8 @@ arch=('x86_64' 'aarch64')
 url="${server_url}/${repo}"
 license=('MIT')
 depends=('cairo' 'pango' 'glib2' 'dbus' 'libgcc' 'glibc')
+optdepends=('wireplumber: lucent osd volume and mic'
+            'brightnessctl: lucent osd brightness')
 provides=("\${_pkgname}=\${pkgver}")
 conflicts=("\${_pkgname}")
 # Upstream already strips the binary: ship it byte-for-byte, with no empty
