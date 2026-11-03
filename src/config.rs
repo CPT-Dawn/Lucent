@@ -27,6 +27,8 @@ pub const REFERENCE: &str = include_str!("../default_config.toml");
 pub struct Config {
     pub general: General,
     pub layout: Layout,
+    /// `[osd]`: where and how long OSDs show.
+    pub osd: Osd,
     /// `[theme]`: a Preset (Midnight Bloom if unset) and any Theme field
     /// set on top of it.
     pub theme: ThemeOverride,
@@ -154,6 +156,42 @@ impl Default for Layout {
             width: 360,
             gap: 8,
             monitor: None,
+        }
+    }
+}
+
+/// `[osd]`: the OSD, a single compact Popup for levels such as volume and
+/// brightness, placed apart from the Stack.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Osd {
+    /// Whether tagged Notifications with a `value` show as the OSD. Off,
+    /// they show as ordinary Popups in the Stack.
+    pub enabled: bool,
+    /// How long the OSD stays up, in milliseconds in the file, unless the
+    /// app asks for its own; 0 means never expire.
+    #[serde(deserialize_with = "millis")]
+    pub timeout: Duration,
+    pub anchor: Anchor,
+    /// Distance from the screen edges, in pixels.
+    pub margin: Margin,
+    /// OSD width in pixels.
+    pub width: u32,
+}
+
+impl Default for Osd {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timeout: Duration::from_millis(1500),
+            anchor: Anchor::BottomCenter,
+            margin: Margin {
+                top: 64,
+                right: 64,
+                bottom: 64,
+                left: 64,
+            },
+            width: 300,
         }
     }
 }
@@ -310,7 +348,7 @@ impl Config {
 }
 
 impl Config {
-    /// Brings `[general]` and `[layout]` numbers into the ranges Lucent can
+    /// Brings `[general]`, `[layout]` and `[osd]` numbers into the ranges Lucent can
     /// draw (a width of 0 is even a Wayland protocol error), reporting each
     /// one changed. Theme numbers are bounded as each Theme is resolved.
     fn bound(&mut self) -> Vec<Problem> {
@@ -331,6 +369,12 @@ impl Config {
         clamp("layout.margin.right", &mut layout.margin.right, 0, 8192);
         clamp("layout.margin.bottom", &mut layout.margin.bottom, 0, 8192);
         clamp("layout.margin.left", &mut layout.margin.left, 0, 8192);
+        let osd = &mut self.osd;
+        clamp("osd.width", &mut osd.width, 64, 4096);
+        clamp("osd.margin.top", &mut osd.margin.top, 0, 8192);
+        clamp("osd.margin.right", &mut osd.margin.right, 0, 8192);
+        clamp("osd.margin.bottom", &mut osd.margin.bottom, 0, 8192);
+        clamp("osd.margin.left", &mut osd.margin.left, 0, 8192);
         clamp("general.body_lines", &mut self.general.body_lines, 1, 100);
         problems
     }

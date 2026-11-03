@@ -77,6 +77,35 @@ bottom = 16
 left = 16
 
 
+[osd]
+
+# The OSD is one compact Popup with an icon and a level bar, for volume,
+# brightness and the like, shown apart from the Stack. A Notification shows
+# as the OSD when it carries a synchronous tag (the
+# `x-canonical-private-synchronous` or `x-dunst-stack-tag` hint) and a
+# `value` hint, as `lucent osd` and most volume scripts send. A new OSD
+# replaces the one up. Set to false to show these as ordinary Popups.
+enabled = true
+
+# How long the OSD stays up, in milliseconds, unless the app asks for its
+# own timeout (see `honor_app_timeouts`). 0 keeps it up until clicked.
+timeout = 1500
+
+# Where the OSD sits; the same choices as [layout] anchor.
+anchor = "bottom-center"
+
+# OSD width, in pixels.
+width = 300
+
+# Distance from the screen edges, in pixels. Only the edges the anchor
+# touches matter.
+[osd.margin]
+top = 64
+right = 64
+bottom = 64
+left = 64
+
+
 [theme]
 
 # The built-in Theme to start from. One of:

@@ -1,19 +1,29 @@
 use std::process::ExitCode;
 
 use lucent::app::{self, Exit};
-use lucent::{config, error};
+use lucent::{config, error, osd};
 
 fn main() -> ExitCode {
     lucent::log::init();
-    match std::env::args().nth(1).as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
         None => {}
         Some("--default-config") => {
             print!("{}", config::REFERENCE);
             return ExitCode::SUCCESS;
         }
+        Some("osd") => {
+            return match osd::run(&args[1..]) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    error!("{e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         // A typo must not start a daemon nobody asked for.
         Some(arg) => {
-            error!("unknown argument `{arg}`; try --default-config");
+            error!("unknown argument `{arg}`; try --default-config or osd");
             return ExitCode::FAILURE;
         }
     }

@@ -10,6 +10,7 @@ pub mod ids;
 pub mod image;
 pub mod log;
 pub mod markup;
+pub mod osd;
 pub mod theme;
 pub mod wayland;
 pub mod xdg;

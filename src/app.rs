@@ -105,7 +105,7 @@ pub fn run(config: Config) -> Result<Exit, Box<dyn Error>> {
         None
     } else {
         let scale = ids.load_scale().unwrap_or(wayland::UNSCALED);
-        let (wayland, source) = Wayland::connect(config.layout.clone(), scale)?;
+        let (wayland, source) = Wayland::connect(config.layout.clone(), config.osd.clone(), scale)?;
         handle.insert_source(source, |(), queue, app: &mut App| {
             let Some(wayland) = app.wayland.as_mut() else {
                 return Ok(0);

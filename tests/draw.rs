@@ -27,6 +27,7 @@ fn popup(labels: &[&str]) -> Popup {
         timeout: None,
         progress: None,
         theme: Theme::default(),
+        osd: false,
     }
 }
 

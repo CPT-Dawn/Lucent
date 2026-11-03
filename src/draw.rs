@@ -52,6 +52,95 @@ const ACTION_PADDING: f64 = 8.0;
 const ACTION_WASH: u8 = 12;
 /// Corner radius of a photo or avatar, as a share of its shorter side.
 const PHOTO_ROUNDING: f64 = 0.225;
+/// The OSD's level bar is thicker than a Popup's progress bar: it is the
+/// whole point of the OSD.
+const OSD_BAR_HEIGHT: f64 = 6.0;
+/// Space between the OSD's icon, bar and number.
+const OSD_GAP: f64 = 14.0;
+/// The widest number the OSD shows, which sizes its number column so the
+/// bar keeps its length as the level changes.
+const OSD_WIDEST: &str = "100";
+
+/// The OSD's number, right-aligned in a column wide enough for any level.
+fn osd_label(cr: &Context, popup: &Popup) -> Layout {
+    let theme = &popup.theme;
+    let layout = Layout::new(&text_context(cr));
+    layout.set_font_description(Some(&FontDescription::from_string(&format!(
+        "{} Semi-Bold {}",
+        theme.font, theme.summary_size
+    ))));
+    layout.set_text(OSD_WIDEST);
+    let column = layout.pixel_extents().1.width();
+    layout.set_width(column * pango::SCALE);
+    layout.set_alignment(pango::Alignment::Right);
+    layout.set_text(&popup.progress.map_or(String::new(), |p| p.to_string()));
+    layout
+}
+
+/// The OSD's height: its icon, bar or number, whichever is tallest.
+fn osd_height(cr: &Context, popup: &Popup, icon: Option<&ImageSurface>) -> f64 {
+    let label = f64::from(osd_label(cr, popup).pixel_extents().1.height());
+    let icon = icon.map_or(0.0, |icon| icon::extent(icon).1);
+    2.0 * f64::from(popup.theme.padding) + label.max(icon).max(OSD_BAR_HEIGHT)
+}
+
+/// Paints the OSD's row: its icon, then its level as a bar and a number,
+/// all centred on the same line.
+fn paint_osd(
+    cr: &Context,
+    popup: &Popup,
+    icon: Option<&ImageSurface>,
+    w: f64,
+    h: f64,
+) -> Result<(), cairo::Error> {
+    let theme = &popup.theme;
+    let padding = f64::from(theme.padding);
+    let mut left = padding;
+    if let Some(icon) = icon {
+        let (iw, ih) = icon::extent(icon);
+        cr.save()?;
+        if !matches!(popup.image, Some(Image::Icon(_))) {
+            rounded_rect(
+                cr,
+                left,
+                (h - ih) / 2.0,
+                iw,
+                ih,
+                iw.min(ih) * PHOTO_ROUNDING,
+            );
+            cr.clip();
+        }
+        cr.set_source_surface(icon, left, (h - ih) / 2.0)?;
+        cr.paint()?;
+        cr.restore()?;
+        left += iw + OSD_GAP;
+    }
+    let label = osd_label(cr, popup);
+    let (_, extents) = label.pixel_extents();
+    let column = f64::from(label.width()) / f64::from(pango::SCALE);
+    cr.move_to(
+        w - padding - column,
+        (h - f64::from(extents.height())) / 2.0 - f64::from(extents.y()),
+    );
+    set_source(cr, theme.summary);
+    pangocairo::functions::show_layout(cr, &label);
+
+    let Some(progress) = popup.progress else {
+        return Ok(());
+    };
+    let width = (w - padding - column - OSD_GAP - left).max(0.0);
+    let y = (h - OSD_BAR_HEIGHT) / 2.0;
+    cr.save()?;
+    rounded_rect(cr, left, y, width, OSD_BAR_HEIGHT, OSD_BAR_HEIGHT / 2.0);
+    set_source(cr, theme.progress_track);
+    cr.fill_preserve()?;
+    cr.clip();
+    cr.rectangle(left, y, width * f64::from(progress) / 100.0, OSD_BAR_HEIGHT);
+    set_source(cr, theme.progress_fill);
+    cr.fill()?;
+    cr.restore()?;
+    Ok(())
+}
 
 /// The text blocks of a Popup, top to bottom, with their colours.
 ///
@@ -233,7 +322,7 @@ pub fn action_rects_at(
     width: u32,
     scale: f64,
 ) -> Vec<Rect> {
-    if popup.actions.is_empty() {
+    if popup.osd || popup.actions.is_empty() {
         return Vec::new();
     }
     let padding = f64::from(popup.theme.padding);
@@ -253,6 +342,15 @@ pub fn measure(popup: &Popup, icon: Option<&ImageSurface>, width: u32) -> u32 {
 /// [`measure`], for a Popup painted at `scale`; the height is still in
 /// surface pixels.
 pub fn measure_at(popup: &Popup, icon: Option<&ImageSurface>, width: u32, scale: f64) -> u32 {
+    if popup.osd {
+        return ImageSurface::create(Format::ARgb32, 1, 1)
+            .and_then(|s| Context::new(&s))
+            .map(|cr| {
+                cr.scale(scale, scale);
+                osd_height(&cr, popup, icon).ceil() as u32
+            })
+            .unwrap_or(0);
+    }
     let padding = f64::from(popup.theme.padding);
     let body = measure_body(popup, icon, width, scale);
     let bottom = layout_actions(popup.actions.len(), body, width, padding)
@@ -310,6 +408,10 @@ pub fn paint(
         rounded_rect(cr, x, padding, aw, h - 2.0 * padding, aw / 2.0);
         set_source(cr, theme.accent);
         cr.fill()?;
+    }
+
+    if popup.osd {
+        return paint_osd(cr, popup, icon, w, h);
     }
 
     let left = text_left(popup, icon);
