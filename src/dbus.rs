@@ -33,8 +33,24 @@ const TEST_INTERFACE: &str = "dev.cptdawn.Lucent.Test";
 
 /// Capabilities are added only in the change that implements them. Not
 /// `body-hyperlinks`: links are styled but cannot be clicked, and a sender
-/// told they can hides the address behind the link text.
-const CAPABILITIES: [&str; 4] = ["actions", "body", "body-markup", "icon-static"];
+/// told they can hides the address behind the link text. The last two say
+/// the synchronous tags in [`TAG_HINTS`] are honoured.
+const CAPABILITIES: [&str; 6] = [
+    "actions",
+    "body",
+    "body-markup",
+    "icon-static",
+    "x-canonical-private-synchronous",
+    "x-dunst-stack-tag",
+];
+
+/// Hints that tag a Notification so the next with the same tag replaces it:
+/// Notify OSD's, dunst's, and the bare `synchronous` some scripts send.
+const TAG_HINTS: [&str; 3] = [
+    "x-canonical-private-synchronous",
+    "x-dunst-stack-tag",
+    "synchronous",
+];
 
 /// How long a handed-off Notify may take, D-Bus activation of the new
 /// Lucent included: libdbus's own default call timeout.
@@ -305,6 +321,7 @@ fn parse_notify(msg: &Message) -> Result<Notification, Box<dyn Error>> {
         timeout: Timeout::from_millis(timeout),
         // Progress in percent, an int32 by the spec; any integer will do.
         value: hints.get("value").and_then(|v| integer(&*v.0)),
+        tag: tag(&hints),
     })
 }
 
@@ -380,6 +397,15 @@ fn decode_pixels(value: &(dyn RefArg + 'static)) -> Option<Pixels> {
         channels: int(5)?,
         data: cast::<Vec<u8>>(value.as_static_inner(6)?)?,
     })
+}
+
+/// The first non-empty synchronous tag among [`TAG_HINTS`].
+fn tag(hints: &PropMap) -> Option<String> {
+    TAG_HINTS
+        .iter()
+        .filter_map(|key| hints.get(*key)?.0.as_str())
+        .find(|tag| !tag.is_empty())
+        .map(crate::core::clip_tag)
 }
 
 /// The `urgency` hint, a byte by the spec; some senders use other integer

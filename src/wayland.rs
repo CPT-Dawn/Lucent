@@ -69,6 +69,16 @@ use crate::{debug, draw, error};
 
 /// The layer namespace compositor rules can target.
 const NAMESPACE: &str = "lucent";
+/// The OSD's own namespace, so a rule can animate it differently.
+const OSD_NAMESPACE: &str = "lucent-osd";
+
+/// Where a Popup goes: the Stack's `[layout]`, or the OSD's `[osd]`.
+#[derive(Debug, Clone, Copy)]
+struct Place {
+    anchor: config::Anchor,
+    margin: config::Margin,
+    width: u32,
+}
 
 /// Scales are kept in 120ths, as `wp_fractional_scale_v1` sends them.
 pub const UNSCALED: u32 = 120;
@@ -106,6 +116,7 @@ pub struct Wayland {
     pool: SlotPool,
     qh: QueueHandle<Wayland>,
     layout: Layout,
+    osd: config::Osd,
     /// Set once a missing `[layout] monitor` has been reported, so the log
     /// says it once rather than per Popup.
     reported_monitor: bool,
@@ -184,6 +195,7 @@ impl Wayland {
     /// (see [`Self::scale_hint`]), or [`UNSCALED`] if unknown.
     pub fn connect(
         layout: Layout,
+        osd: config::Osd,
         scale_hint: u32,
     ) -> Result<(Self, WaylandSource<Wayland>), Box<dyn Error>> {
         let conn = Connection::connect_to_env()?;
@@ -219,6 +231,7 @@ impl Wayland {
             pool,
             qh,
             layout,
+            osd,
             reported_monitor: false,
             surfaces: Vec::new(),
         };
@@ -234,26 +247,55 @@ impl Wayland {
         Ok((wayland, WaylandSource::new(conn, queue)))
     }
 
-    /// Makes the on-screen Popups match `stack`, nearest the anchor first.
-    /// Popups whose content changed are redrawn in place; the rest are only
-    /// moved, and only if their position changed.
+    /// Makes the on-screen Popups match `stack`, nearest the anchor first,
+    /// and the OSD among them where `[osd]` puts it. Popups whose content
+    /// changed are redrawn in place; the rest are only moved, and only if
+    /// their position changed.
     pub fn show(&mut self, stack: &[Popup]) {
-        // Dropping a LayerSurface destroys it.
-        self.surfaces
-            .retain(|s| stack.iter().any(|p| p.id == s.popup.id));
-        let mut offset = self.edge_margin();
+        // Dropping a LayerSurface destroys it. A Popup that turned into the
+        // OSD, or back, moves somewhere else entirely: open it afresh.
+        self.surfaces.retain(|s| {
+            stack
+                .iter()
+                .any(|p| p.id == s.popup.id && p.osd == s.popup.osd)
+        });
+        let mut offset = self.edge_margin(self.place(false));
         for (index, popup) in stack.iter().enumerate() {
+            let at = if popup.osd {
+                self.edge_margin(self.place(true))
+            } else {
+                offset
+            };
             match self.surfaces.iter().position(|s| s.popup.id == popup.id) {
-                Some(at) => {
-                    self.surfaces.swap(index, at);
-                    self.update(index, popup, offset);
+                Some(found) => {
+                    self.surfaces.swap(index, found);
+                    self.update(index, popup, at);
                 }
                 None => {
-                    let surface = self.open(popup.clone(), offset);
+                    let surface = self.open(popup.clone(), at);
                     self.surfaces.insert(index, surface);
                 }
             }
-            offset += px(self.surfaces[index].height + self.layout.gap);
+            if !popup.osd {
+                offset += px(self.surfaces[index].height + self.layout.gap);
+            }
+        }
+    }
+
+    /// Where Popups go: the Stack's place, or the OSD's if `osd`.
+    fn place(&self, osd: bool) -> Place {
+        if osd {
+            Place {
+                anchor: self.osd.anchor,
+                margin: self.osd.margin,
+                width: self.osd.width,
+            }
+        } else {
+            Place {
+                anchor: self.layout.anchor,
+                margin: self.layout.margin,
+                width: self.layout.width,
+            }
         }
     }
 
@@ -279,10 +321,10 @@ impl Wayland {
         self.tokens.clear();
     }
 
-    /// The margin on the edge the Stack grows from.
-    fn edge_margin(&self) -> i32 {
-        let margin = self.layout.margin;
-        px(if self.layout.anchor.is_top() {
+    /// The margin on the edge `place` grows from.
+    fn edge_margin(&self, place: Place) -> i32 {
+        let margin = place.margin;
+        px(if place.anchor.is_top() {
             margin.top
         } else {
             margin.bottom
@@ -317,7 +359,7 @@ impl Wayland {
 
     /// Brings an open Popup up to date with `popup` at `offset`.
     fn update(&mut self, index: usize, popup: &Popup, offset: i32) {
-        let layout = &self.layout;
+        let place = self.place(popup.osd);
         let surface = &mut self.surfaces[index];
         let mut commit = false;
         let mut redraw = false;
@@ -349,7 +391,7 @@ impl Wayland {
         }
         if surface.offset != offset {
             surface.offset = offset;
-            set_margin(&surface.layer, layout, offset);
+            set_margin(&surface.layer, place, offset);
             commit = true;
         }
         if redraw {
@@ -363,7 +405,8 @@ impl Wayland {
     }
 
     fn open(&mut self, popup: Popup, offset: i32) -> Surface {
-        let width = self.layout.width;
+        let place = self.place(popup.osd);
+        let width = place.width;
         let scale = self.scale_hint;
         let icon = load_icon(&popup, scale);
         let height = draw::measure_at(&popup, icon.as_ref(), width, to_f64(scale));
@@ -384,11 +427,11 @@ impl Wayland {
             &self.qh,
             surface,
             Layer::Overlay,
-            Some(NAMESPACE),
+            Some(if popup.osd { OSD_NAMESPACE } else { NAMESPACE }),
             output.as_ref(),
         );
-        layer.set_anchor(anchor(self.layout.anchor));
-        set_margin(&layer, &self.layout, offset);
+        layer.set_anchor(anchor(place.anchor));
+        set_margin(&layer, place, offset);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_size(width, height);
         // The first commit carries no buffer; drawing waits for configure.
@@ -544,16 +587,16 @@ fn anchor(anchor: config::Anchor) -> Anchor {
     }
 }
 
-/// Places a Popup `offset` pixels from the edge the Stack grows from; the
+/// Places a Popup `offset` pixels from the edge `place` grows from; the
 /// other edges keep their configured margins.
-fn set_margin(layer: &LayerSurface, layout: &Layout, offset: i32) {
+fn set_margin(layer: &LayerSurface, place: Place, offset: i32) {
     let config::Margin {
         top,
         right,
         bottom,
         left,
-    } = layout.margin;
-    let (top, bottom) = if layout.anchor.is_top() {
+    } = place.margin;
+    let (top, bottom) = if place.anchor.is_top() {
         (offset, px(bottom))
     } else {
         (px(top), offset)

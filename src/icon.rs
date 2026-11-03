@@ -82,6 +82,11 @@ impl Icons {
         (f64::from(self.size) * self.scale).round().max(1.0) as u32
     }
 
+    /// Whether the icon theme, or its fallbacks, has an icon called `name`.
+    pub fn has(&self, name: &str) -> bool {
+        self.lookup(name).is_some()
+    }
+
     /// The image scaled so its longest side is the icon size, or `None` if
     /// it cannot be found or read.
     pub fn load(&self, image: &Image) -> Option<ImageSurface> {

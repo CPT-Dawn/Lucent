@@ -47,6 +47,7 @@ fn notify_shows_a_popup_that_expires_after_the_default_timeout() {
                 timeout: Some(Duration::from_secs(5)),
                 progress: None,
                 theme: Theme::default(),
+                osd: false,
             }]),
             Effect::StartTimer {
                 id,

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use lucent::config::{Anchor, ClickAction, Config, General, Layout, Margin, Problem};
+use lucent::config::{Anchor, ClickAction, Config, General, Layout, Margin, Osd, Problem};
 use lucent::theme::ThemeOverride;
 
 fn defaults() -> Config {
@@ -30,6 +30,18 @@ fn defaults() -> Config {
             width: 360,
             gap: 8,
             monitor: None,
+        },
+        osd: Osd {
+            enabled: true,
+            timeout: Duration::from_millis(1500),
+            anchor: Anchor::BottomCenter,
+            margin: Margin {
+                top: 64,
+                right: 64,
+                bottom: 64,
+                left: 64,
+            },
+            width: 300,
         },
         theme: ThemeOverride::default(),
         rules: Vec::new(),
@@ -87,6 +99,18 @@ fn a_full_config_sets_every_field() {
         right = 2
         bottom = 3
         left = 4
+
+        [osd]
+        enabled = false
+        timeout = 900
+        anchor = "top-center"
+        width = 250
+
+        [osd.margin]
+        top = 5
+        right = 6
+        bottom = 7
+        left = 8
         "#,
     );
 
@@ -115,6 +139,18 @@ fn a_full_config_sets_every_field() {
                 width: 420,
                 gap: 12,
                 monitor: Some("HDMI-A-1".into()),
+            },
+            osd: Osd {
+                enabled: false,
+                timeout: Duration::from_millis(900),
+                anchor: Anchor::TopCenter,
+                margin: Margin {
+                    top: 5,
+                    right: 6,
+                    bottom: 7,
+                    left: 8,
+                },
+                width: 250,
             },
             theme: ThemeOverride::default(),
             rules: Vec::new(),

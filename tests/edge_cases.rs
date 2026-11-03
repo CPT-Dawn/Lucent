@@ -23,6 +23,7 @@ fn popup(body: &str, body_lines: u32) -> Popup {
         timeout: None,
         progress: None,
         theme: Theme::default(),
+        osd: false,
     }
 }
 

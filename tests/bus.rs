@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use dbus::arg::PropMap;
+use dbus::arg::{PropMap, RefArg, Variant};
 use dbus::blocking::{Connection, Proxy};
 use dbus::message::MatchRule;
 
@@ -231,7 +231,17 @@ fn reports_server_information_and_capabilities_and_accepts_notify() {
     let (caps,): (Vec<String>,) = notifications(&client)
         .method_call(NAME, "GetCapabilities", ())
         .unwrap();
-    assert_eq!(caps, ["actions", "body", "body-markup", "icon-static"]);
+    assert_eq!(
+        caps,
+        [
+            "actions",
+            "body",
+            "body-markup",
+            "icon-static",
+            "x-canonical-private-synchronous",
+            "x-dunst-stack-tag",
+        ]
+    );
 
     let first = notify(&client, "Hello", "World");
     let second = notify(&client, "Hello", "again");
@@ -881,4 +891,44 @@ fn a_64_bit_image_data_hint_does_not_kill_the_daemon() {
     let result = notify_hints(&client, hints, -1);
     assert!(result.is_ok(), "Notify failed: {result:?}");
     assert!(name_has_owner(&client, NAME), "Lucent died");
+}
+
+#[test]
+fn a_synchronous_tag_replaces_the_live_notification_with_that_tag() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+    let tagged = |key: &str, tag: &str, value: i32| {
+        let mut hints = PropMap::new();
+        hints.insert(
+            key.into(),
+            Variant(Box::new(tag.to_owned()) as Box<dyn RefArg>),
+        );
+        hints.insert("value".into(), Variant(Box::new(value) as Box<dyn RefArg>));
+        let (id,): (u32,) = notifications(&client)
+            .method_call(
+                NAME,
+                "Notify",
+                (
+                    "vol",
+                    0u32,
+                    "",
+                    "Volume",
+                    "",
+                    Vec::<String>::new(),
+                    hints,
+                    -1i32,
+                ),
+            )
+            .unwrap();
+        id
+    };
+
+    let first = tagged("x-canonical-private-synchronous", "volume", 40);
+    assert_eq!(
+        tagged("x-canonical-private-synchronous", "volume", 45),
+        first
+    );
+    assert_eq!(tagged("x-dunst-stack-tag", "volume", 50), first);
+    assert_ne!(tagged("x-dunst-stack-tag", "brightness", 50), first);
 }

@@ -33,6 +33,10 @@ pub struct Notification {
     pub value: Option<i64>,
     /// The image chosen from `app_icon` and the image hints.
     pub image: Option<Image>,
+    /// A synchronous tag (`x-canonical-private-synchronous` or
+    /// `x-dunst-stack-tag`): a Notification with the same tag as a live one
+    /// replaces it in place, as if it had named its id in `replaces_id`.
+    pub tag: Option<String>,
 }
 
 /// A labelled choice the sender offers; the key is reported back when it is
@@ -141,6 +145,9 @@ pub struct Popup {
     pub progress: Option<u8>,
     /// The Theme to draw this Popup with, resolved for its Urgency.
     pub theme: Theme,
+    /// Whether this is the OSD: drawn as a compact level bar and placed by
+    /// `[osd]`, apart from the Stack.
+    pub osd: bool,
 }
 
 /// Why a Notification closed, as numbered by the freedesktop spec.
@@ -187,7 +194,8 @@ pub enum Event {
 pub enum Effect {
     /// The Notify was accepted under this id; reply to the sender with it.
     Accepted(u32),
-    /// The Stack changed; this is the complete set of Popups to show, in order.
+    /// The Stack changed; this is the complete set of Popups to show, in
+    /// order, followed by the OSD if one is up.
     Stack(Vec<Popup>),
     /// Fire [`Event::TimerFired`] for `id` once `after` has elapsed.
     StartTimer { id: u32, after: Duration },
@@ -211,6 +219,14 @@ pub enum Effect {
 pub const MAX_APP_NAME: usize = 256;
 pub const MAX_SUMMARY: usize = 1024;
 pub const MAX_BODY: usize = 8 * 1024;
+
+/// The most bytes of a synchronous tag kept.
+pub const MAX_TAG: usize = 256;
+
+/// A synchronous tag, cut to [`MAX_TAG`] bytes.
+pub fn clip_tag(tag: &str) -> String {
+    clip(tag, MAX_TAG)
+}
 
 /// `text` cut to at most `max` bytes, on a character boundary.
 fn clip(text: &str, max: usize) -> String {
@@ -265,6 +281,10 @@ pub struct Core {
     stack: Vec<Popup>,
     /// Notifications waiting for room, oldest first.
     queue: VecDeque<Popup>,
+    /// The OSD, if one is up. It never waits in the Queue.
+    osd: Option<Popup>,
+    /// The tag of every live Notification that sent one.
+    tags: HashMap<u32, String>,
     /// Whether the idle grace period is running.
     idle_armed: bool,
     /// The Actions of every live Notification that offers any.
@@ -297,6 +317,8 @@ impl Core {
             last_id: 0,
             stack: Vec::new(),
             queue: VecDeque::new(),
+            osd: None,
+            tags: HashMap::new(),
             idle_armed: false,
             actions: HashMap::new(),
             timeouts: HashMap::new(),
@@ -318,9 +340,19 @@ impl Core {
         self
     }
 
-    /// Whether the Stack and Queue are both empty.
+    /// Whether the Stack, the Queue and the OSD are all empty.
     fn is_idle(&self) -> bool {
-        self.stack.is_empty() && self.queue.is_empty()
+        self.stack.is_empty() && self.queue.is_empty() && self.osd.is_none()
+    }
+
+    /// Whether `id` is on screen: in the Stack, or the OSD.
+    fn is_shown(&self, id: u32) -> bool {
+        self.stack.iter().chain(&self.osd).any(|p| p.id == id)
+    }
+
+    /// Whether `n` shows as the OSD: it has a tag and a level to show.
+    fn is_osd(&self, n: &Notification) -> bool {
+        self.config.osd.enabled && n.tag.is_some() && n.value.is_some()
     }
 
     /// The most recent id handed out, for the adapters to persist.
@@ -369,7 +401,26 @@ impl Core {
         }
     }
 
-    fn notify(&mut self, n: Notification) -> Vec<Effect> {
+    fn notify(&mut self, mut n: Notification) -> Vec<Effect> {
+        let osd = self.is_osd(&n);
+        // A tag names the live Notification to replace, unless the sender
+        // named one itself.
+        if n.replaces_id == 0
+            && let Some(tag) = &n.tag
+            && let Some((&id, _)) = self.tags.iter().find(|(_, t)| *t == tag)
+        {
+            n.replaces_id = id;
+        }
+        // Replacing a Notification shown the other way (a Popup with an
+        // OSD, or the reverse) takes it out quietly: it lives on, under the
+        // same id, in its new form.
+        let id = n.replaces_id;
+        if id != 0 && self.osd.as_ref().is_some_and(|p| p.id == id) != osd && self.is_live(id) {
+            self.take_out(id);
+        }
+        if osd {
+            return self.notify_osd(n);
+        }
         if let Some(effects) = self.replace(&n) {
             return effects;
         }
@@ -377,22 +428,10 @@ impl Core {
             0 => self.fresh_id(),
             id => id,
         };
-        let timeout = self.expiry(&n);
-        let theme = self.theme(&n);
-        let popup = Popup {
-            id,
-            app_name: clip(&n.app_name, MAX_APP_NAME),
-            summary: clip(&n.summary, MAX_SUMMARY),
-            body: markup::clean(&clip(&n.body, MAX_BODY)),
-            image: n.image,
-            actions: shown_actions(&n.actions),
-            more: 0,
-            body_lines: self.config.general.body_lines,
-            timeout,
-            progress: percent(n.value),
-            theme,
-        };
+        let popup = self.popup(id, &n, false);
+        let timeout = popup.timeout;
         self.set_actions(id, n.actions);
+        self.set_tag(id, n.tag);
         if self.stack.len() >= self.max_visible {
             self.queue.push_back(popup);
             return vec![Effect::Accepted(id), self.stack_effect()];
@@ -401,6 +440,85 @@ impl Core {
         let mut effects = vec![Effect::Accepted(id), self.stack_effect()];
         effects.extend(self.start_timer(id, timeout));
         effects
+    }
+
+    /// Shows `n` as the OSD. It updates the OSD in place if it replaces it;
+    /// otherwise it takes the place of any OSD already up, which closes as
+    /// expired, so a brightness change cuts a volume OSD short.
+    fn notify_osd(&mut self, n: Notification) -> Vec<Effect> {
+        let current = self.osd.as_ref().map(|p| p.id);
+        let id = match n.replaces_id {
+            0 => self.fresh_id(),
+            id => id,
+        };
+        let mut effects = vec![Effect::Accepted(id)];
+        let mut closed = None;
+        if let Some(old) = current.filter(|&old| old != id) {
+            self.take_out(old);
+            effects.push(Effect::CancelTimer(old));
+            closed = Some(Effect::Closed {
+                id: old,
+                reason: CloseReason::Expired,
+            });
+        }
+        let popup = self.popup(id, &n, true);
+        let timeout = popup.timeout;
+        self.osd = Some(popup);
+        self.set_actions(id, n.actions);
+        self.set_tag(id, n.tag);
+        effects.push(self.stack_effect());
+        // A replacement that never expires must also stop the old timer.
+        effects.push(
+            self.start_timer(id, timeout)
+                .unwrap_or(Effect::CancelTimer(id)),
+        );
+        effects.extend(closed);
+        effects
+    }
+
+    /// The Popup for `n` under `id`, laid out as the OSD if `osd`.
+    fn popup(&self, id: u32, n: &Notification, osd: bool) -> Popup {
+        Popup {
+            id,
+            app_name: clip(&n.app_name, MAX_APP_NAME),
+            summary: clip(&n.summary, MAX_SUMMARY),
+            body: markup::clean(&clip(&n.body, MAX_BODY)),
+            image: n.image.clone(),
+            actions: if osd {
+                Vec::new()
+            } else {
+                shown_actions(&n.actions)
+            },
+            more: 0,
+            body_lines: self.config.general.body_lines,
+            timeout: self.expiry(n, osd),
+            progress: percent(n.value),
+            theme: self.theme(n),
+            osd,
+        }
+    }
+
+    fn set_tag(&mut self, id: u32, tag: Option<String>) {
+        match tag {
+            Some(tag) => self.tags.insert(id, tag),
+            None => self.tags.remove(&id),
+        };
+    }
+
+    /// Drops every trace of a live Notification without reporting it: the
+    /// caller decides what, if anything, the sender hears.
+    fn take_out(&mut self, id: u32) {
+        self.stack.retain(|p| p.id != id);
+        self.queue.retain(|p| p.id != id);
+        if self.osd.as_ref().is_some_and(|p| p.id == id) {
+            self.osd = None;
+        }
+        self.actions.remove(&id);
+        self.tags.remove(&id);
+        self.timeouts.remove(&id);
+        if self.hovered == Some(id) {
+            self.hovered = None;
+        }
     }
 
     /// The next id after the last one handed out, skipping any still live:
@@ -416,22 +534,32 @@ impl Core {
     }
 
     fn is_live(&self, id: u32) -> bool {
-        self.stack.iter().chain(&self.queue).any(|p| p.id == id)
+        self.stack
+            .iter()
+            .chain(&self.queue)
+            .chain(&self.osd)
+            .any(|p| p.id == id)
     }
 
     /// How long a Notification stays up once shown: never for critical ones,
     /// otherwise a matching Rule's timeout, else what the sender asked unless
     /// the config says to ignore it. A configured timeout of zero means
-    /// never, as `expire_timeout = 0` does in the spec.
-    fn expiry(&self, n: &Notification) -> Option<Duration> {
+    /// never, as `expire_timeout = 0` does in the spec. The OSD's own
+    /// default is `[osd] timeout`.
+    fn expiry(&self, n: &Notification, osd: bool) -> Option<Duration> {
         let general = &self.config.general;
+        let default = if osd {
+            self.config.osd.timeout
+        } else {
+            general.timeout
+        };
         let rule = self.config.rule_timeout(n);
         let configured = match (n.urgency, n.timeout) {
             (Urgency::Critical, _) => return None,
             _ if rule.is_some() => rule,
             (_, Timeout::Never) if general.honor_app_timeouts => return None,
             (_, Timeout::After(after)) if general.honor_app_timeouts => return Some(after),
-            _ => Some(general.timeout),
+            _ => Some(default),
         };
         configured.filter(|t| !t.is_zero())
     }
@@ -440,7 +568,7 @@ impl Core {
     /// returns `None` if it replaces nothing that is still live.
     fn replace(&mut self, n: &Notification) -> Option<Vec<Effect>> {
         let id = n.replaces_id;
-        let timeout = self.expiry(n);
+        let timeout = self.expiry(n, false);
         let theme = self.theme(n);
         let update = |p: &mut Popup| {
             p.app_name = clip(&n.app_name, MAX_APP_NAME);
@@ -455,6 +583,7 @@ impl Core {
         if let Some(popup) = self.stack.iter_mut().find(|p| p.id == id) {
             update(popup);
             self.set_actions(id, n.actions.clone());
+            self.set_tag(id, n.tag.clone());
             // A replacement that never expires must also stop the old timer.
             let timer = self
                 .start_timer(id, timeout)
@@ -464,6 +593,7 @@ impl Core {
         let queued = self.queue.iter_mut().find(|p| p.id == id)?;
         update(queued);
         self.set_actions(id, n.actions.clone());
+        self.set_tag(id, n.tag.clone());
         Some(vec![Effect::Accepted(id)])
     }
 
@@ -476,7 +606,7 @@ impl Core {
     }
 
     fn close(&mut self, id: u32) -> Vec<Effect> {
-        if self.stack.iter().any(|p| p.id == id) {
+        if self.is_shown(id) {
             self.remove(id, CloseReason::Closed, vec![Effect::CancelTimer(id)])
         } else if self.queue.iter().any(|p| p.id == id) {
             self.remove(id, CloseReason::Closed, vec![])
@@ -486,7 +616,7 @@ impl Core {
     }
 
     fn click(&mut self, id: u32, button: Button) -> Vec<Effect> {
-        if !self.stack.iter().any(|p| p.id == id) {
+        if !self.is_shown(id) {
             return vec![];
         }
         let action = self.config.general.binding(button);
@@ -514,7 +644,7 @@ impl Core {
     /// Runs one of a shown Popup's Actions, then dismisses it. A key the
     /// Notification does not offer does nothing.
     fn invoke_action(&mut self, id: u32, key: String) -> Vec<Effect> {
-        let offered = self.stack.iter().any(|p| p.id == id)
+        let offered = self.is_shown(id)
             && self
                 .actions
                 .get(&id)
@@ -546,7 +676,7 @@ impl Core {
     }
 
     fn hover_start(&mut self, id: u32) -> Vec<Effect> {
-        if !self.stack.iter().any(|p| p.id == id) {
+        if !self.is_shown(id) {
             return vec![];
         }
         self.hovered = Some(id);
@@ -570,11 +700,14 @@ impl Core {
         self.start_timer(id, Some(remaining)).into_iter().collect()
     }
 
-    /// Empties the Stack and the Queue in one change, reporting each closed.
+    /// Empties the Stack, the Queue and the OSD in one change, reporting
+    /// each closed.
     fn dismiss_all(&mut self) -> Vec<Effect> {
-        let stack = std::mem::take(&mut self.stack);
+        let mut stack = std::mem::take(&mut self.stack);
+        stack.extend(self.osd.take());
         let queue = std::mem::take(&mut self.queue);
         self.actions.clear();
+        self.tags.clear();
         self.timeouts.clear();
         self.hovered = None;
         let mut effects: Vec<Effect> = stack.iter().map(|p| Effect::CancelTimer(p.id)).collect();
@@ -598,13 +731,7 @@ impl Core {
     /// Takes a live Notification out of the Stack or Queue, refills the Stack
     /// from the Queue, and reports it closed for `reason`.
     fn remove(&mut self, id: u32, reason: CloseReason, mut effects: Vec<Effect>) -> Vec<Effect> {
-        self.stack.retain(|p| p.id != id);
-        self.queue.retain(|p| p.id != id);
-        self.actions.remove(&id);
-        self.timeouts.remove(&id);
-        if self.hovered == Some(id) {
-            self.hovered = None;
-        }
+        self.take_out(id);
         let started = self.promote();
         effects.push(self.stack_effect());
         effects.extend(started);
@@ -632,12 +759,14 @@ impl Core {
         self.config.theme_for(n)
     }
 
-    /// The Stack as the renderer should show it, "+N more" on the last slot.
+    /// The Stack as the renderer should show it, "+N more" on the last slot,
+    /// then the OSD.
     fn stack_effect(&self) -> Effect {
         let mut stack = self.stack.clone();
         if let Some(last) = stack.last_mut() {
             last.more = self.queue.len();
         }
+        stack.extend(self.osd.clone());
         Effect::Stack(stack)
     }
 }

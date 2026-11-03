@@ -12,6 +12,14 @@ _Avoid_: Alert, message, toast
 The on-screen rendering of a single Notification.
 _Avoid_: Window, card, bubble, toast
 
+**OSD**:
+The single compact Popup that shows a level such as volume or brightness, placed apart from the Stack. A Notification is shown as the OSD when it carries a synchronous tag and a `value` hint.
+_Avoid_: Overlay, indicator, HUD
+
+**Tag**:
+A sender-chosen name (the `x-canonical-private-synchronous` or `x-dunst-stack-tag` hint) under which a Notification replaces the live one with the same Tag.
+_Avoid_: Stack tag, sync id
+
 **Stack**:
 The Popups currently visible, ordered from the anchor edge outward.
 _Avoid_: List, column
