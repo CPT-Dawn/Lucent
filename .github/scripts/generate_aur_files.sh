@@ -52,6 +52,8 @@ arch=('x86_64' 'aarch64')
 url="${server_url}/${repo}"
 license=('MIT')
 depends=('cairo' 'pango' 'glib2' 'dbus' 'libgcc' 'glibc')
+optdepends=('wireplumber: lucent osd volume and mic'
+            'brightnessctl: lucent osd brightness')
 makedepends=('cargo')
 provides=("lucent")
 source=("${tarball_url}")
@@ -97,6 +99,8 @@ pkgbase = ${pkgname}
 	depends = dbus
 	depends = libgcc
 	depends = glibc
+	optdepends = wireplumber: lucent osd volume and mic
+	optdepends = brightnessctl: lucent osd brightness
 	provides = lucent
 	source = ${tarball_url}
 	sha256sums = ${sha256}

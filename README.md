@@ -94,7 +94,12 @@ paru -S lucent       # builds from source (needs Rust, takes a minute or two)
 paru -S lucent-bin   # prebuilt release binary, x86_64 and aarch64
 ```
 
-Both install the same files. `lucent-bin` is built by CI from the release tag
+Both install the same files. For [the OSD](#volume-and-brightness-osd),
+`lucent osd` uses `wpctl` and `brightnessctl`. They are optional
+dependencies, so install the ones you need (`paru -S wireplumber
+brightnessctl`). Most PipeWire desktops already have `wireplumber`.
+
+`lucent-bin` is built by CI from the release tag
 with the same flags as `lucent`, and its checksums are taken from the assets
 attached to the [GitHub release](https://github.com/CPT-Dawn/Lucent/releases).
 
