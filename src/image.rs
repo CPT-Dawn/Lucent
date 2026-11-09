@@ -58,7 +58,14 @@ impl Image {
     pub fn from_name(s: &str) -> Option<Self> {
         if s.is_empty() {
             None
-        } else if let Some(path) = s.strip_prefix("file://") {
+        } else if let Some(rest) = s.strip_prefix("file://") {
+            // RFC 8089: an optional `localhost` host, and no query or
+            // fragment in the path (a real `?` or `#` arrives escaped).
+            let path = rest
+                .strip_prefix("localhost")
+                .filter(|p| p.starts_with('/'))
+                .unwrap_or(rest);
+            let path = path.split(['?', '#']).next().unwrap_or_default();
             Some(Self::File(percent_decode(path).into()))
         } else if s.starts_with('/') {
             Some(Self::File(s.into()))

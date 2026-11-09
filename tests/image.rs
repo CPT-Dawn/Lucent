@@ -135,6 +135,19 @@ fn paths_and_file_uris_name_files_and_anything_else_names_an_icon() {
 }
 
 #[test]
+fn a_file_uri_may_name_localhost_and_carry_a_query_or_fragment() {
+    let none = PropMap::new();
+    assert_eq!(
+        image_from_hints("file://localhost/tmp/a%20b.png", &none),
+        Some(Image::File("/tmp/a b.png".into()))
+    );
+    assert_eq!(
+        image_from_hints("file:///tmp/a.png?size=48#top", &none),
+        Some(Image::File("/tmp/a.png".into()))
+    );
+}
+
+#[test]
 fn image_data_is_premultiplied_argb() {
     // One half-transparent red pixel, RGBA.
     let pixel = pixels((1, 1, 4, true, 8, 4), vec![255, 0, 0, 128]);
