@@ -183,8 +183,11 @@ impl DbusAdapter {
         if self.test_hooks && interface.as_deref() == Some(TEST_INTERFACE) {
             return test_hook(msg, handle, to_apply);
         }
-        if interface.as_deref() != Some(NAME) {
-            return unknown_method(msg);
+        match interface.as_deref() {
+            Some("org.freedesktop.DBus.Peer") => return peer(msg),
+            Some("org.freedesktop.DBus.Introspectable") => return introspect(msg),
+            Some(NAME) => {}
+            _ => return unknown_method(msg),
         }
         match member.as_deref() {
             Some("GetCapabilities") => msg.method_return().append1(CAPABILITIES.to_vec()),
@@ -426,6 +429,120 @@ fn integer(value: &(dyn RefArg + 'static)) -> Option<i64> {
         .as_i64()
         .or_else(|| value.as_u64().and_then(|u| i64::try_from(u).ok()))
 }
+
+/// `org.freedesktop.DBus.Peer`: liveness and machine id, for `busctl` and friends.
+fn peer(msg: &Message) -> Message {
+    match msg.member().as_deref() {
+        Some("Ping") => msg.method_return(),
+        Some("GetMachineId") => {
+            let id = ["/etc/machine-id", "/var/lib/dbus/machine-id"]
+                .iter()
+                .find_map(|path| std::fs::read_to_string(path).ok())
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty());
+            match id {
+                Some(id) => msg.method_return().append1(id),
+                None => msg.error(
+                    &"org.freedesktop.DBus.Error.Failed".into(),
+                    c"no machine id available",
+                ),
+            }
+        }
+        _ => unknown_method(msg),
+    }
+}
+
+/// `org.freedesktop.DBus.Introspectable`: a static description of what
+/// [`Bus::answer`] serves, with parent nodes so `busctl tree` finds the object.
+fn introspect(msg: &Message) -> Message {
+    if msg.member().as_deref() != Some("Introspect") {
+        return unknown_method(msg);
+    }
+    let xml = match msg.path().as_deref().map(|p| p.trim_end_matches('/')) {
+        Some("") => NODE_ROOT,
+        Some("/org") => NODE_ORG,
+        Some("/org/freedesktop") => NODE_FREEDESKTOP,
+        Some("/org/freedesktop/Notifications") => NODE_NOTIFICATIONS,
+        _ => NODE_EMPTY,
+    };
+    msg.method_return().append1(xml)
+}
+
+const NODE_ROOT: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <node name="org"/>
+</node>
+"#;
+const NODE_ORG: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <node name="freedesktop"/>
+</node>
+"#;
+const NODE_FREEDESKTOP: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <node name="Notifications"/>
+</node>
+"#;
+const NODE_EMPTY: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node/>
+"#;
+const NODE_NOTIFICATIONS: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.freedesktop.DBus.Peer">
+    <method name="Ping"/>
+    <method name="GetMachineId">
+      <arg name="machine_uuid" type="s" direction="out"/>
+    </method>
+  </interface>
+  <interface name="org.freedesktop.DBus.Introspectable">
+    <method name="Introspect">
+      <arg name="xml_data" type="s" direction="out"/>
+    </method>
+  </interface>
+  <interface name="org.freedesktop.Notifications">
+    <method name="Notify">
+      <arg name="app_name" type="s" direction="in"/>
+      <arg name="replaces_id" type="u" direction="in"/>
+      <arg name="app_icon" type="s" direction="in"/>
+      <arg name="summary" type="s" direction="in"/>
+      <arg name="body" type="s" direction="in"/>
+      <arg name="actions" type="as" direction="in"/>
+      <arg name="hints" type="a{sv}" direction="in"/>
+      <arg name="expire_timeout" type="i" direction="in"/>
+      <arg name="id" type="u" direction="out"/>
+    </method>
+    <method name="CloseNotification">
+      <arg name="id" type="u" direction="in"/>
+    </method>
+    <method name="GetCapabilities">
+      <arg name="capabilities" type="as" direction="out"/>
+    </method>
+    <method name="GetServerInformation">
+      <arg name="name" type="s" direction="out"/>
+      <arg name="vendor" type="s" direction="out"/>
+      <arg name="version" type="s" direction="out"/>
+      <arg name="spec_version" type="s" direction="out"/>
+    </method>
+    <signal name="NotificationClosed">
+      <arg name="id" type="u"/>
+      <arg name="reason" type="u"/>
+    </signal>
+    <signal name="ActionInvoked">
+      <arg name="id" type="u"/>
+      <arg name="action_key" type="s"/>
+    </signal>
+    <signal name="ActivationToken">
+      <arg name="id" type="u"/>
+      <arg name="activation_token" type="s"/>
+    </signal>
+  </interface>
+</node>
+"#;
 
 fn unknown_method(msg: &Message) -> Message {
     msg.error(

@@ -932,3 +932,70 @@ fn a_synchronous_tag_replaces_the_live_notification_with_that_tag() {
     assert_eq!(tagged("x-dunst-stack-tag", "volume", 50), first);
     assert_ne!(tagged("x-dunst-stack-tag", "brightness", 50), first);
 }
+
+fn introspect(client: &Connection, path: &str) -> String {
+    let (xml,): (String,) = client
+        .with_proxy(NAME, path, CALL_TIMEOUT)
+        .method_call("org.freedesktop.DBus.Introspectable", "Introspect", ())
+        .unwrap();
+    xml
+}
+
+#[test]
+fn answers_peer_ping_and_get_machine_id() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+
+    notifications(&client)
+        .method_call::<(), _, _, _>("org.freedesktop.DBus.Peer", "Ping", ())
+        .unwrap();
+    let (id,): (String,) = notifications(&client)
+        .method_call("org.freedesktop.DBus.Peer", "GetMachineId", ())
+        .unwrap();
+    assert_eq!(id.len(), 32, "a machine id is 32 hex digits: {id:?}");
+    assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+}
+
+#[test]
+fn introspection_declares_the_notifications_interface() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+
+    let xml = introspect(&client, PATH);
+    for expected in [
+        r#"<interface name="org.freedesktop.Notifications">"#,
+        r#"<method name="Notify">"#,
+        r#"<method name="CloseNotification">"#,
+        r#"<method name="GetCapabilities">"#,
+        r#"<method name="GetServerInformation">"#,
+        r#"<signal name="NotificationClosed">"#,
+        r#"<signal name="ActionInvoked">"#,
+        r#"<signal name="ActivationToken">"#,
+        // Notify: susssasa{sv}i in, u out.
+        r#"name="app_name" type="s" direction="in""#,
+        r#"name="replaces_id" type="u" direction="in""#,
+        r#"name="actions" type="as" direction="in""#,
+        r#"name="hints" type="a{sv}" direction="in""#,
+        r#"name="expire_timeout" type="i" direction="in""#,
+        r#"name="id" type="u" direction="out""#,
+        r#"name="reason" type="u""#,
+        r#"name="action_key" type="s""#,
+        r#"name="activation_token" type="s""#,
+        "org.freedesktop.DBus.Introspectable",
+        "org.freedesktop.DBus.Peer",
+    ] {
+        assert!(xml.contains(expected), "missing {expected} in {xml}");
+    }
+}
+
+#[test]
+fn introspecting_the_parents_lists_the_child_node() {
+    let bus = Bus::new();
+    let _lucent = bus.spawn_lucent();
+    let client = bus.client();
+
+    assert!(introspect(&client, "/").contains(r#"<node name="org"/>"#));
+    assert!(introspect(&client, "/org/freedesktop").contains(r#"<node name="Notifications"/>"#));
+}
