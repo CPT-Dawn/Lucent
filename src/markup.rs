@@ -75,7 +75,8 @@ fn is_entity(text: &str) -> bool {
     let Some(num) = name.strip_prefix('#') else {
         return ["amp", "lt", "gt", "quot", "apos"].contains(&name);
     };
-    let code = match num.strip_prefix(['x', 'X']) {
+    // Lowercase `x` only: GMarkup rejects `&#X41;`, and the body with it.
+    let code = match num.strip_prefix('x') {
         Some(hex) if hex.bytes().all(|b| b.is_ascii_hexdigit()) => u32::from_str_radix(hex, 16),
         Some(_) => return false,
         None if num.bytes().all(|b| b.is_ascii_digit()) => num.parse(),

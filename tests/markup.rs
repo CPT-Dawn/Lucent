@@ -70,3 +70,12 @@ fn stray_ampersands_are_escaped_and_real_entities_kept() {
 fn angle_brackets_that_are_not_tags_are_escaped() {
     assert_eq!(shown("1 < 2 > 0 <3 <b"), "1 &lt; 2 &gt; 0 &lt;3 &lt;b");
 }
+
+#[test]
+fn an_uppercase_hex_reference_is_text_not_markup() {
+    // GMarkup only knows `&#x`; passing `&#X41;` through broke the whole
+    // body, which then showed with its tags as literal text.
+    let body = shown("&#X41; <b>a</b>");
+    assert!(pango::parse_markup(&body, '\0').is_ok(), "{body:?}");
+    assert_eq!(body, "&amp;#X41; <b>a</b>");
+}
