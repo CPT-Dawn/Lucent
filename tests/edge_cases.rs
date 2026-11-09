@@ -141,3 +141,34 @@ fn a_huge_body_is_cut_before_it_is_laid_out() {
     assert!(stack[0].body.len() <= lucent::core::MAX_BODY);
     assert!(stack[0].summary.len() <= lucent::core::MAX_SUMMARY);
 }
+
+/// Runs `lucent <args>` with stdout or stderr on a pipe nobody reads, so
+/// every write to it fails with EPIPE; returns the exit code.
+fn exit_code_with_closed(stream: &str, args: &[&str]) -> Option<i32> {
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lucent"));
+    command.args(args).stdin(Stdio::null());
+    match stream {
+        "stdout" => command.stdout(Stdio::piped()).stderr(Stdio::null()),
+        _ => command.stderr(Stdio::piped()).stdout(Stdio::null()),
+    };
+    let mut child = command.spawn().unwrap();
+    drop(child.stdout.take());
+    drop(child.stderr.take());
+    child.wait().unwrap().code()
+}
+
+#[test]
+fn a_closed_stderr_does_not_abort_lucent() {
+    // eprintln! panics on EPIPE, and the panic can't print either: SIGABRT.
+    assert_eq!(exit_code_with_closed("stderr", &["bogus"]), Some(1));
+}
+
+#[test]
+fn printing_the_default_config_into_a_closed_pipe_does_not_abort() {
+    // As in `lucent --default-config | head -1`.
+    assert_eq!(
+        exit_code_with_closed("stdout", &["--default-config"]),
+        Some(0)
+    );
+}

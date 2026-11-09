@@ -9,7 +9,8 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         None => {}
         Some("--default-config") => {
-            print!("{}", config::REFERENCE);
+            // A reader that stops early (`| head`) is not a failure.
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), config::REFERENCE.as_bytes());
             return ExitCode::SUCCESS;
         }
         Some("osd") => {

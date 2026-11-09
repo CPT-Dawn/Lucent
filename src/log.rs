@@ -17,10 +17,17 @@ pub fn verbose() -> bool {
     VERBOSE.load(Ordering::Relaxed)
 }
 
+/// Writes one log line to stderr. A broken stderr (a closed pipe, a hung-up
+/// terminal) loses the line rather than the daemon: `eprintln!` would panic.
+pub fn write(level: &str, message: std::fmt::Arguments) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "lucent: {level}: {message}");
+}
+
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
-        eprintln!("lucent: error: {}", format_args!($($arg)*))
+        $crate::log::write("error", format_args!($($arg)*))
     };
 }
 
@@ -28,7 +35,7 @@ macro_rules! error {
 macro_rules! debug {
     ($($arg:tt)*) => {
         if $crate::log::verbose() {
-            eprintln!("lucent: debug: {}", format_args!($($arg)*))
+            $crate::log::write("debug", format_args!($($arg)*))
         }
     };
 }
