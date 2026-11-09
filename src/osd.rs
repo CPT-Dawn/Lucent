@@ -110,16 +110,23 @@ fn apply(target: Target, change: Change) -> Result<Level, String> {
                 "@DEFAULT_AUDIO_SOURCE@"
             };
             match change {
-                // Raising never goes past 100%, as volume keys usually don't.
+                // Raising never goes past 100%, as volume keys usually don't,
+                // but never pulls down a level boosted past it elsewhere:
+                // `-l` caps the result, not the step.
                 Change::Up(step) => {
-                    wpctl(&["set-volume", "-l", "1.0", node, &format!("{step}%+")])?;
+                    let now = volume(node)?.percent;
+                    let limit = if now > 100 {
+                        format!("{:.2}", f64::from(now) / 100.0)
+                    } else {
+                        "1.0".to_owned()
+                    };
+                    wpctl(&["set-volume", "-l", &limit, node, &format!("{step}%+")])?;
                 }
                 Change::Down(step) => wpctl(&["set-volume", node, &format!("{step}%-")])?,
                 Change::Mute => wpctl(&["set-mute", node, "toggle"])?,
                 Change::Show => {}
             };
-            let out = output(Command::new("wpctl").args(["get-volume", node]), "wpctl")?;
-            parse_wpctl(&out).ok_or_else(|| format!("could not read wpctl's `{}`", out.trim()))
+            volume(node)
         }
         Target::Brightness => {
             let mut command = Command::new("brightnessctl");
@@ -130,10 +137,25 @@ fn apply(target: Target, change: Change) -> Result<Level, String> {
                 Change::Up(step) => command.args(["set", &format!("{step}%+")]),
                 Change::Show | Change::Mute => &mut command,
             };
-            let out = output(&mut command, "brightnessctl")?;
-            parse_brightnessctl(&out)
-                .ok_or_else(|| format!("could not read brightnessctl's `{}`", out.trim()))
+            let (out, err) = output(&mut command, "brightnessctl")?;
+            parse_brightnessctl(&out).ok_or_else(|| unreadable("brightnessctl", &out, &err))
         }
+    }
+}
+
+/// The volume of `node`, read back from `wpctl get-volume`.
+fn volume(node: &str) -> Result<Level, String> {
+    let (out, err) = output(Command::new("wpctl").args(["get-volume", node]), "wpctl")?;
+    parse_wpctl(&out).ok_or_else(|| unreadable("wpctl", &out, &err))
+}
+
+/// Why `name`'s output could not be read. A missing device leaves stdout
+/// empty but still exits 0, with the reason on stderr.
+fn unreadable(name: &str, out: &str, err: &str) -> String {
+    match (out.trim(), err.trim()) {
+        ("", "") => format!("{name} printed nothing"),
+        ("", err) => format!("{name}: {err}"),
+        (out, _) => format!("could not read {name}'s `{out}`"),
     }
 }
 
@@ -141,8 +163,8 @@ fn wpctl(args: &[&str]) -> Result<(), String> {
     output(Command::new("wpctl").args(args), "wpctl").map(drop)
 }
 
-/// Runs `command`, returning its stdout, or why it failed.
-fn output(command: &mut Command, name: &str) -> Result<String, String> {
+/// Runs `command`, returning its stdout and stderr, or why it failed.
+fn output(command: &mut Command, name: &str) -> Result<(String, String), String> {
     let out = command.output().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => format!(
             "{name} is not installed; {}",
@@ -160,7 +182,10 @@ fn output(command: &mut Command, name: &str) -> Result<String, String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
 }
 
 /// Reads `wpctl get-volume`, as `Volume: 0.45` or `Volume: 0.45 [MUTED]`.

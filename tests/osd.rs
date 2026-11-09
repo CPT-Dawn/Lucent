@@ -268,3 +268,64 @@ fn volume_icons_follow_the_level() {
     assert_eq!(at(50, false), "audio-volume-medium");
     assert_eq!(at(90, false), "audio-volume-high");
 }
+
+/// Runs `lucent osd <args>` against a fake `wpctl` whose `get-volume` prints
+/// `volume`, `wpctl_stderr` going to stderr; returns the calls it got and
+/// Lucent's stderr. The bus is unreachable, so nothing is shown.
+fn osd_with_fake_wpctl(args: &[&str], volume: &str, wpctl_stderr: &str) -> (String, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("calls");
+    let fake = dir.path().join("wpctl");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$1\" = get-volume ] && printf '%s' '{volume}'\nprintf '%s' '{wpctl_stderr}' >&2\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_lucent"))
+        .arg("osd")
+        .args(args)
+        .env("PATH", dir.path())
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent/lucent-test",
+        )
+        .output()
+        .unwrap();
+    (
+        std::fs::read_to_string(&log).unwrap_or_default(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn volume_up_never_lowers_a_volume_already_above_100_percent() {
+    let (calls, _) = osd_with_fake_wpctl(&["volume", "up"], "Volume: 1.50\n", "");
+
+    // `-l 1.0` would have clamped 150% down to 100%.
+    assert!(
+        !calls.contains("-l 1.0 "),
+        "volume up at 150% was limited to 100%: {calls}"
+    );
+}
+
+#[test]
+fn volume_up_still_stops_at_100_percent() {
+    let (calls, _) = osd_with_fake_wpctl(&["volume", "up"], "Volume: 0.98\n", "");
+
+    assert!(
+        calls.contains("set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+"),
+        "{calls}"
+    );
+}
+
+#[test]
+fn a_missing_audio_device_is_reported_with_wpctl_s_reason() {
+    let (_, stderr) = osd_with_fake_wpctl(&["mic", "show"], "", "Node 99 not found");
+
+    assert!(stderr.contains("wpctl: Node 99 not found"), "{stderr}");
+}
