@@ -103,3 +103,46 @@ fn icons_on_a_scaled_monitor_hold_more_pixels_at_the_same_size() {
     assert_eq!((icon.width(), icon.height()), (96, 96));
     assert_eq!(lucent::icon::extent(&icon), (48.0, 48.0));
 }
+
+#[test]
+fn an_svg_cannot_make_lucent_read_the_files_it_references() {
+    // An `<image href>` to a FIFO would block the read forever (and
+    // `/dev/zero` would eat memory), freezing the daemon's only thread.
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("fifo");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let path = dir.path().join("sneaky.svg");
+    std::fs::write(
+        &path,
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><image href="{}" width="1" height="1"/></svg>"#,
+            fifo.display()
+        ),
+    )
+    .unwrap();
+
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let loaded = Icons::new(SIZE, "hicolor")
+            .load(&Image::File(path))
+            .is_some();
+        done.send(loaded).unwrap();
+    });
+
+    let loaded = finished.recv_timeout(std::time::Duration::from_secs(5));
+    // Unblock a stuck reader so the test process can exit. Read+write, as a
+    // write-only open would itself wait for a reader that never comes.
+    drop(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&fifo),
+    );
+    assert_eq!(loaded, Ok(true), "loading the SVG hung on the FIFO");
+}

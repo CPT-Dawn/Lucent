@@ -182,8 +182,17 @@ impl Icons {
     }
 
     fn load_svg(&self, bytes: &[u8]) -> Result<ImageSurface, String> {
-        let tree =
-            usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|e| e.to_string())?;
+        // usvg's default resolver reads every `<image href>` path it is given,
+        // with no size or file-type check: `/dev/zero` or a FIFO would hang
+        // the daemon. Referenced files are never loaded; inline data still is.
+        let options = usvg::Options {
+            image_href_resolver: usvg::ImageHrefResolver {
+                resolve_string: Box::new(|_, _| None),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let tree = usvg::Tree::from_data(bytes, &options).map_err(|e| e.to_string())?;
         let svg = tree.size();
         let (w, h) = self.device(self.fitted(svg.width() as f64, svg.height() as f64));
         let mut pixmap = tiny_skia::Pixmap::new(w as u32, h as u32).ok_or("empty SVG")?;
