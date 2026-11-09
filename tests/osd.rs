@@ -329,3 +329,47 @@ fn a_missing_audio_device_is_reported_with_wpctl_s_reason() {
 
     assert!(stderr.contains("wpctl: Node 99 not found"), "{stderr}");
 }
+
+#[test]
+fn turning_a_popup_into_the_osd_lets_the_queue_move_up() {
+    let (config, _) = Config::parse("general.max_visible = 1");
+    let mut core = Core::with_config(config);
+    core.handle(Event::Notify(Notification {
+        tag: Some("volume".into()),
+        ..plain("tagged")
+    }));
+    core.handle(Event::Notify(plain("waiting")));
+
+    let effects = core.handle(Event::Notify(level("volume", 50)));
+
+    let shown = stack(&effects);
+    assert!(
+        shown.iter().any(|p| p.summary == "waiting" && !p.osd),
+        "the queued Popup stayed hidden: {shown:?}"
+    );
+}
+
+#[test]
+fn a_tag_names_the_newest_notification_that_took_it() {
+    // A sender-chosen replaces_id can hand a live Tag to a second id; the
+    // next tagged Notification must replace that newest one, every time.
+    for _ in 0..32 {
+        let mut core = Core::new();
+        core.handle(Event::Notify(Notification {
+            tag: Some("t".into()),
+            ..plain("first")
+        }));
+        let newest = accepted(&core.handle(Event::Notify(Notification {
+            replaces_id: 99,
+            tag: Some("t".into()),
+            ..plain("second")
+        })));
+
+        let effects = core.handle(Event::Notify(Notification {
+            tag: Some("t".into()),
+            ..plain("third")
+        }));
+
+        assert_eq!(accepted(&effects), newest);
+    }
+}

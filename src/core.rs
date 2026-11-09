@@ -415,11 +415,16 @@ impl Core {
         // OSD, or the reverse) takes it out quietly: it lives on, under the
         // same id, in its new form.
         let id = n.replaces_id;
+        let mut promoted = Vec::new();
         if id != 0 && self.osd.as_ref().is_some_and(|p| p.id == id) != osd && self.is_live(id) {
             self.take_out(id);
+            // A Popup turned OSD frees its place in the Stack.
+            promoted = self.promote();
         }
         if osd {
-            return self.notify_osd(n);
+            let mut effects = self.notify_osd(n);
+            effects.extend(promoted);
+            return effects;
         }
         if let Some(effects) = self.replace(&n) {
             return effects;
@@ -500,7 +505,11 @@ impl Core {
 
     fn set_tag(&mut self, id: u32, tag: Option<String>) {
         match tag {
-            Some(tag) => self.tags.insert(id, tag),
+            // A Tag names one live Notification: the newest to take it.
+            Some(tag) => {
+                self.tags.retain(|&other, t| other == id || *t != tag);
+                self.tags.insert(id, tag)
+            }
             None => self.tags.remove(&id),
         };
     }
