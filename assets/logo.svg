@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Lucent logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22303A"/>
+      <stop offset="1" stop-color="#151C20"/>
+    </linearGradient>
+    <linearGradient id="glyph" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8DE3DC"/>
+      <stop offset="1" stop-color="#5BA8E0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#8DE3DC" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#8DE3DC" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#bg)"/>
+  <rect x="4.5" y="4.5" width="119" height="119" rx="29.5" fill="none" stroke="url(#glyph)" stroke-opacity="0.55"/>
+  <circle cx="64" cy="64" r="46" fill="url(#glow)"/>
+  <!-- A Popup with the edge of the next one in the Stack behind it, and its text lines. -->
+  <path d="M42 34 H86 M42 50 H86 A14 14 0 0 1 100 64 V84 A14 14 0 0 1 86 98 H42 A14 14 0 0 1 28 84 V64 A14 14 0 0 1 42 50 Z M46 68 H70 M46 81 H82" fill="none" stroke="url(#glyph)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
