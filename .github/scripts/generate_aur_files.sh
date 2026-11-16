@@ -35,7 +35,7 @@ else
   sha256="$(sha256sum "$tmp_tarball" | awk '{print $1}')"
 fi
 
-pkgdesc="The lightest notification daemon for Wayland"
+pkgdesc="Wayland notification daemon and volume/brightness OSD that exits when idle: no memory, no wakeups until it's needed"
 
 # depends mirrors the binary's NEEDED libraries. No wayland: wayland-client is
 # pure Rust here and never links libwayland-client. No libxkbcommon: sctk is

@@ -5,9 +5,11 @@ edition = "2024"
 rust-version = "1.92"
 authors = ["Swastik Patel <ping@cptdawn.dev>"]
 license = "MIT"
-description = "The lightest notification daemon for Wayland"
+description = "Wayland notification daemon and volume/brightness OSD that exits when idle: no memory, no wakeups until it's needed"
+homepage = "https://aur.archlinux.org/packages/lucent"
+readme = "README.md"
 repository = "https://github.com/CPT-Dawn/Lucent"
-keywords = ["wayland", "notification", "daemon", "hyprland", "dbus"]
+keywords = ["wayland", "notifications", "hyprland", "osd", "layer-shell"]
 categories = ["gui", "command-line-utilities"]
 
 [features]
