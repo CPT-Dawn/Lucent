@@ -1,0 +1,47 @@
+name: Bug report
+description: Lucent did something wrong or nothing at all
+labels: [needs-triage]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Lucent version
+      description: "`pacman -Q lucent`, or the release or commit you built"
+      placeholder: lucent 2.1.1-1
+    validations:
+      required: true
+  - type: input
+    id: compositor
+    attributes:
+      label: Compositor and distribution
+      placeholder: Hyprland 0.57.2 on Arch Linux
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The `notify-send` or `lucent osd` command that shows it is ideal.
+      placeholder: |
+        1. notify-send -u critical "Battery low" "5%"
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: "Run `LUCENT_LOG=debug lucent` in a terminal and reproduce, or paste `journalctl --user -b | grep -i lucent`."
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Config
+      description: Your `~/.config/lucent/config.toml`, if you have one.
+      render: toml
